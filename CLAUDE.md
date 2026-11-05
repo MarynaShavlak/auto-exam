@@ -25,6 +25,7 @@
 - Набори (scope): `batch1..5`, `all`, `saved`, `mistakes`, `mix:batch1+batch3`. Списки в `SCOPE_IDS`, назви в `SCOPE_NAMES`; мікси створює `ensureMixedScope`.
 - Сесія набору: `{order, index, answers, mode:'normal'|'review'}`; перевірка — `cleanSession`. Кожен набір має окремий прогрес у `root.sessions`.
 - `render()` щоразу перебудовує всю панель; DOM будується через `h(tag, props, children)` і `button(text, css, handler, disabled)`; повідомлення — `notice()`.
+- Спільні помічники: `fileButton()` (кнопка + прихований `<input type=file>`), `downloadJson()` (експорт), `syncSessionOrder()` (підгонка сесії під новий список id), `questionLabel(q)` («Порція N · №M»).
 - Відповідь → `recordAttempt(id, isCorrect)` — єдине місце оновлення статистики помилок (помилка → 0/3, `MASTERED_AT=3` правильних поспіль → засвоєно).
 - Порядок відповідей перемішується при кожному завантаженні сторінки (`createAnswerOrders`).
 
@@ -32,11 +33,12 @@
 
 `pdr-quiz-batches-v1` (сесії), `pdr-quiz-saved-questions-v1` (закладки), `pdr-quiz-typical-mistakes-v1` (помилки), `pdr-quiz-batch-answer-layouts-v1` (порядок відповідей), `my-pdr-quiz-standalone-v3` (міграція старої версії).
 
-## Захардкоджені кількості
+## Додавання питань і порцій
 
-При додаванні питань чи порцій оновити вручну:
-- `index.html`: `<title>`, підзаголовок «5 порцій · 212 питань», підписи карток порцій (83/35/24/22/48), «Усі питання — 212», «від 2 до 5 порцій», початкові `#total`/`#pending`.
-- `app.js`: `BATCHES`, `SCOPE_IDS`, `SCOPE_NAMES`.
+- Порції (`BATCHES`), картки порцій, лічильники в шапці й `<title>` будуються з `questions.js` (`renderBatchCards`). Нова порція = нове значення `batchN` у даних.
+- Нові питання в наявній порції дописуються в кінець сесій користувачів без скидання прогресу (`cleanSession`).
+- Після змін у даних: `node tools/check-data.js` (унікальні id, `correct` у межах, усі картинки існують і використовуються).
+- Числа відмінюються через `questionsCount(n)` / `batchesCount(n)` (`plural`).
 
 ## Стиль коду
 

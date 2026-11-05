@@ -1,8 +1,12 @@
-const BATCHES=[{key:'batch1',name:'Порція 1',ids:questions.filter(q=>q.batch==='batch1').map(q=>q.id)},
-               {key:'batch2',name:'Порція 2',ids:questions.filter(q=>q.batch==='batch2').map(q=>q.id)},
-               {key:'batch3',name:'Порція 3',ids:questions.filter(q=>q.batch==='batch3').map(q=>q.id)},
-               {key:'batch4',name:'Порція 4',ids:questions.filter(q=>q.batch==='batch4').map(q=>q.id)},
-               {key:'batch5',name:'Порція 5',ids:questions.filter(q=>q.batch==='batch5').map(q=>q.id)}];
+// Порції визначаються з даних (batch1, batch2, …): нова порція в questions.js з’явиться автоматично.
+function batchNumber(key){return Number(key.replace('batch',''))}
+function questionLabel(q){return `Порція ${batchNumber(q.batch)} · №${q.batchOrdinal}`}
+// Українські форми числа: 1 питання, 3 порції, 5 питань.
+function plural(n,one,few,many){const d=n%10,dd=n%100;return `${n} ${d===1&&dd!==11?one:d>=2&&d<=4&&(dd<12||dd>14)?few:many}`}
+function questionsCount(n){return plural(n,'питання','питання','питань')}
+function batchesCount(n){return plural(n,'порція','порції','порцій')}
+const BATCHES=[...new Set(questions.map(q=>q.batch))].sort((a,b)=>batchNumber(a)-batchNumber(b))
+ .map(key=>({key,name:'Порція '+batchNumber(key),ids:questions.filter(q=>q.batch===key).map(q=>q.id)}));
 const Q=Object.fromEntries(questions.map(q=>[q.id,q]));
 const BOOKMARKS_KEY='pdr-quiz-saved-questions-v1';
 let savedIds=[];
@@ -27,8 +31,8 @@ function activeMistakeIds(){
  return Object.keys(mistakeHistory).map(Number).filter(id=>mistakeHistory[id].active).sort((a,b)=>
   mistakeHistory[b].wrongs-mistakeHistory[a].wrongs || mistakeHistory[b].lastWrong-mistakeHistory[a].lastWrong || a-b);
 }
-const SCOPE_IDS={batch1:BATCHES[0].ids,batch2:BATCHES[1].ids,batch3:BATCHES[2].ids,batch4:BATCHES[3].ids,batch5:BATCHES[4].ids,all:questions.map(q=>q.id),saved:[...savedQuestions],mistakes:activeMistakeIds()};
-const SCOPE_NAMES={batch1:'Порція 1',batch2:'Порція 2',batch3:'Порція 3',batch4:'Порція 4',batch5:'Порція 5',all:'Усі питання',saved:'Збережені питання',mistakes:'Найчастіші помилки'};
+const SCOPE_IDS={...Object.fromEntries(BATCHES.map(b=>[b.key,b.ids])),all:questions.map(q=>q.id),saved:[...savedQuestions],mistakes:activeMistakeIds()};
+const SCOPE_NAMES={...Object.fromEntries(BATCHES.map(b=>[b.key,b.name])),all:'Усі питання',saved:'Збережені питання',mistakes:'Найчастіші помилки'};
 // Кожна комбінація має власний ключ сесії: mix:batch1+batch3, mix:batch2+batch3 тощо.
 // Це зберігає незалежний прогрес без зміни існуючих порцій, all і saved.
 const MIX_PREFIX='mix:';
@@ -80,11 +84,9 @@ function cleanSession(s,scope){
  const allowed=scope==='mistakes'?new Set(questions.map(q=>q.id)):new Set(SCOPE_IDS[scope]);
   if(s.order.some(id=>!allowed.has(id))||new Set(s.order).size!==s.order.length)return newSession(scope);
  // Regular run should contain exactly the selected scope. Review runs can be shorter.
- if(s.mode!=='review'&&s.order.length!==allowed.size){
-  if(scope==='mistakes'){/* Під час тренування засвоєне питання залишається на екрані до переходу далі. */}
-   else if(scope==='all'&&s.order.every(id=>allowed.has(id)))s.order=[...s.order,...SCOPE_IDS.all.filter(id=>!s.order.includes(id))];
-   else return newSession(scope);
- }
+ // Нові питання (наприклад, додані в порцію) дописуємо в кінець, не скидаючи прогрес.
+ // У тренуванні помилок засвоєне питання залишається на екрані до переходу далі.
+ if(s.mode!=='review'&&scope!=='mistakes'&&s.order.length!==allowed.size)s.order=[...s.order,...SCOPE_IDS[scope].filter(id=>!s.order.includes(id))];
  const answers={};for(const [id,val] of Object.entries(s.answers||{})){
   const q=Q[id];if(allowed.has(Number(id))&&Number.isInteger(val)&&val>=0&&val<q.answers.length)answers[id]=val;
  }
@@ -115,19 +117,20 @@ function persistMistakes(){
  try{localStorage.setItem(MISTAKES_KEY,JSON.stringify(mistakeHistory))}
  catch(e){notice('Не вдалося зберегти статистику помилок. Перевірте налаштування браузера.')}
 }
-// Коли тренування типових помилок не відкрите, оновлюємо його набір:
-// прибираємо засвоєні й додаємо нові, не чіпаючи прогрес інших порцій.
-function reconcileMistakeSession(){
- if(activeScope==='mistakes'||!root.sessions.mistakes)return;
- const s=root.sessions.mistakes;const allowed=new Set(SCOPE_IDS.mistakes);
- const before=Array.isArray(s.order)?s.order:[];
- const after=[...before.filter(id=>allowed.has(id)),...SCOPE_IDS.mistakes.filter(id=>!before.includes(id))];
+// Підганяє сесію під новий список питань: прибирає зайві, дописує нові в кінець,
+// зберігає порядок, відповіді й поточне питання для тих, що залишились.
+function syncSessionOrder(s,ids){
+ const allowed=new Set(ids),before=Array.isArray(s.order)?s.order:[];
+ const after=[...before.filter(id=>allowed.has(id)),...ids.filter(id=>!before.includes(id))];
  if(before.length===after.length && before.every((id,i)=>id===after[i]))return;
  const current=before[s.index],answers={};
  for(const [key,val] of Object.entries(s.answers||{}))if(allowed.has(Number(key)))answers[key]=val;
  s.order=after;s.answers=answers;s.mode='normal';
  s.index=current!==undefined&&after.includes(current)?after.indexOf(current):Math.min(Number(s.index)||0,Math.max(0,after.length-1));
 }
+// Коли тренування типових помилок не відкрите, оновлюємо його набір:
+// прибираємо засвоєні й додаємо нові, не чіпаючи прогрес інших порцій.
+function reconcileMistakeSession(){if(activeScope!=='mistakes'&&root.sessions.mistakes)syncSessionOrder(root.sessions.mistakes,SCOPE_IDS.mistakes)}
 // Єдина точка зміни глобальної історії. Викликається ТІЛЬКИ на перший клік відповіді.
 function recordAttempt(id,isCorrect){
  let info=mistakeHistory[id];
@@ -150,12 +153,7 @@ function openMistakeQuestion(id){
  answerOrders=createAnswerOrders(answerOrders);openOriginal=false;render();
  document.getElementById('panel').scrollIntoView({behavior:'smooth',block:'start'});
 }
-function exportMistakes(){
- const payload={type:'pdr-typical-mistakes',version:1,records:mistakeHistory,exportedAt:new Date().toISOString()};
- const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
- const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='pdr-typovi-pomylky.json';
- document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-}
+function exportMistakes(){downloadJson({type:'pdr-typical-mistakes',version:1,records:mistakeHistory,exportedAt:new Date().toISOString()},'pdr-typovi-pomylky.json')}
 async function importMistakes(file){
  if(!file)return;
  try{
@@ -180,9 +178,7 @@ function renderMistakeLibrary(){
  info.append(h('p',{text:'Неправильна відповідь у будь-якому режимі → 0/3. Три правильні поспіль у будь-яких тренуваннях → питання засвоєно й зникає зі списку. Нова помилка знову додає його.'}));head.append(info);
  const actions=h('div',{class:'mistake-library-actions'});
  actions.append(button('Експорт статистики','',exportMistakes,Object.keys(mistakeHistory).length===0));
- const importer=h('input',{type:'file',accept:'application/json,.json','aria-label':'Імпортувати статистику типових помилок'});importer.hidden=true;
- importer.addEventListener('change',()=>{importMistakes(importer.files?.[0]);importer.value=''});
- actions.append(button('Імпорт статистики','',()=>importer.click()),importer);head.append(actions);section.append(head);
+ actions.append(...fileButton('Імпорт статистики','application/json,.json','Імпортувати статистику типових помилок',files=>importMistakes(files[0])));head.append(actions);section.append(head);
  if(!SCOPE_IDS.mistakes.length){
   section.append(h('p',{class:'mastery-note',text:'Активних типових помилок поки немає. Список автоматично поповниться, щойно ти даси хоча б одну неправильну відповідь.'}));return;
  }
@@ -191,7 +187,7 @@ function renderMistakeLibrary(){
  for(const id of SCOPE_IDS.mistakes){
   const q=Q[id],entry=mistakeHistory[id];const item=h('div',{class:'mistake-item'});
   const row=h('div',{class:'mistake-item-head'});
-  row.append(h('span',{class:'mistake-id',text:`Порція ${Number(q.batch.replace('batch',''))} · №${q.batchOrdinal}`}));
+  row.append(h('span',{class:'mistake-id',text:questionLabel(q)}));
   row.append(h('span',{class:'mistake-wrongs',text:`Помилок: ${entry.wrongs}`}));item.append(row);
   item.append(h('p',{class:'mistake-question',text:q.question}));
   item.append(h('div',{class:'mastery-label',text:`Правильних поспіль: ${entry.streak} із ${MASTERED_AT}`}));
@@ -203,6 +199,17 @@ function renderMistakeLibrary(){
 
 function h(tag,props={},children=[]){const node=document.createElement(tag);for(const [k,v] of Object.entries(props)){if(k==='class')node.className=v;else if(k==='text')node.textContent=v;else node.setAttribute(k,v)}for(const c of children)node.append(c);return node}
 function button(text,css,handler,disabled=false){const b=h('button',{class:'btn '+css,text,type:'button'});b.disabled=disabled;b.addEventListener('click',handler);return b}
+// Кнопка вибору файлів із прихованим <input type=file>; повертає [кнопка, input] для append(...).
+function fileButton(text,accept,label,onFiles,multiple=false){
+ const input=h('input',{type:'file',accept,'aria-label':label});input.hidden=true;input.multiple=multiple;
+ input.addEventListener('change',()=>{const files=[...input.files];input.value='';if(files.length)onFiles(files)});
+ return [button(text,'',()=>input.click()),input];
+}
+function downloadJson(payload,filename){
+ const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+ const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;
+ document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
 function notice(str){const box=document.getElementById('notice');box.textContent=str;box.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(()=>box.style.display='none',2400)}
 function renderScopes(){
  document.querySelectorAll('.batch-card').forEach(b=>{
@@ -212,7 +219,7 @@ function renderScopes(){
  });
  const picked=getValidMixedBatches(activeScope);
  document.getElementById('multi-summary').textContent=picked
-  ? `${picked.map(b=>b.name).join(' + ')} · ${SCOPE_IDS[activeScope].length} питань`
+  ? `${picked.map(b=>b.name).join(' + ')} · ${questionsCount(SCOPE_IDS[activeScope].length)}`
   : (mixedDraft.size>=2?`${BATCHES.filter(b=>mixedDraft.has(b.key)).map(b=>b.name).join(' + ')} · вибрати`: 'Обрати 2 або більше порцій');
  document.getElementById('saved-count').textContent=savedQuestions.size;
   document.getElementById('mistake-count').textContent=SCOPE_IDS.mistakes.length;
@@ -227,16 +234,16 @@ function renderMixedPicker(){
  const options=h('div',{class:'mixed-options'});
  for(const batch of BATCHES){
   const label=h('label',{class:'mixed-option'});
-  const cb=h('input',{type:'checkbox',value:batch.key,'aria-label':`${batch.name} (${batch.ids.length} питань)`});
+  const cb=h('input',{type:'checkbox',value:batch.key,'aria-label':`${batch.name} (${questionsCount(batch.ids.length)})`});
   cb.checked=mixedDraft.has(batch.key);
   cb.addEventListener('change',()=>{if(cb.checked)mixedDraft.add(batch.key);else mixedDraft.delete(batch.key);renderMixedPicker()});
-  const content=h('span');content.append(h('b',{text:batch.name}),h('small',{text:`${batch.ids.length} питань`}));
+  const content=h('span');content.append(h('b',{text:batch.name}),h('small',{text:questionsCount(batch.ids.length)}));
   label.append(cb,content);options.append(label);
  }
  section.append(options);
  const chosen=BATCHES.filter(batch=>mixedDraft.has(batch.key));
  const count=chosen.reduce((sum,batch)=>sum+batch.ids.length,0);
- section.append(h('p',{class:'mixed-summary',text:chosen.length>=2?`Обрано: ${chosen.length} порції · ${count} питань`:`Обрано: ${chosen.length} із ${BATCHES.length}. Потрібно щонайменше 2 порції.`}));
+ section.append(h('p',{class:'mixed-summary',text:chosen.length>=2?`Обрано: ${batchesCount(chosen.length)} · ${questionsCount(count)}`:`Обрано: ${chosen.length} із ${BATCHES.length}. Потрібно щонайменше 2 порції.`}));
  const actions=h('div',{class:'mixed-actions'});
  const key=getMixedKey([...mixedDraft]);
  const existing=key&&root.sessions[key];
@@ -254,13 +261,7 @@ function renderMixedPicker(){
 function reconcileSavedSession(){
  // Keep the progress of still-saved questions; add new saved IDs and remove unbookmarked ones.
  const existing=activeScope==='saved'?state:(root.sessions.saved||newSession('saved'));
- const before=existing.order||[],current=before[existing.index];
- const after=[...before.filter(id=>savedQuestions.has(id)),...SCOPE_IDS.saved.filter(id=>!before.includes(id))];
- if(before.length!==after.length || before.some((id,i)=>id!==after[i])){
-  const answers={};for(const [key,value] of Object.entries(existing.answers||{}))if(savedQuestions.has(Number(key)))answers[key]=value;
-  existing.order=after;existing.answers=answers;existing.mode='normal';
-  existing.index=current!==undefined&&after.includes(current)?after.indexOf(current):Math.min(Number(existing.index)||0,Math.max(0,after.length-1));
- }
+ syncSessionOrder(existing,SCOPE_IDS.saved);
  root.sessions.saved=existing;
  if(activeScope==='saved')state=existing;
 }
@@ -279,12 +280,7 @@ function openSavedQuestion(id){
  state.index=state.order.indexOf(id);openOriginal=false;render();
  document.getElementById('panel').scrollIntoView({behavior:'smooth',block:'start'});
 }
-function exportSaved(){
- const payload={type:'pdr-bookmarks',version:1,questionIds:[...savedQuestions],exportedAt:new Date().toISOString()};
- const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
- const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='pdr-zberezheni-pytannia.json';
- document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
-}
+function exportSaved(){downloadJson({type:'pdr-bookmarks',version:1,questionIds:[...savedQuestions],exportedAt:new Date().toISOString()},'pdr-zberezheni-pytannia.json')}
 async function importSaved(file){
  if(!file)return;
  try{
@@ -302,16 +298,14 @@ function renderSavedLibrary(){
  const head=h('div',{class:'saved-library-head'});head.append(h('h3',{text:`Мої збережені питання (${savedQuestions.size})`}));
  const actions=h('div',{class:'saved-library-actions'});
  actions.append(button('Експортувати закладки','',exportSaved,savedQuestions.size===0));
- const importer=h('input',{type:'file',accept:'application/json,.json',id:'saved-import','aria-label':'Імпортувати закладки з JSON-файлу'});importer.hidden=true;
- importer.addEventListener('change',()=>{importSaved(importer.files?.[0]);importer.value=''});
- const importButton=button('Імпортувати','',()=>importer.click());actions.append(importButton,importer);head.append(actions);section.append(head);
+ actions.append(...fileButton('Імпортувати','application/json,.json','Імпортувати закладки з JSON-файлу',files=>importSaved(files[0])));head.append(actions);section.append(head);
  if(!savedQuestions.size){section.append(h('p',{class:'saved-empty',text:'Поки немає збережених питань. Натисніть «☆ Зберегти питання» біля будь-якого питання у будь-якій порції.'}));return}
  section.append(h('p',{class:'saved-library-note',text:'Натисніть на питання, щоб відкрити його в тренуванні. Позначки зберігаються незалежно від правильності відповідей.'}));
  const items=h('div',{class:'saved-items'});
  for(const id of SCOPE_IDS.saved){
   const q=Q[id];const item=h('div',{class:'saved-item'});
   const link=h('button',{class:'saved-jump',type:'button',title:q.question});
-  link.append(h('span',{class:'saved-item-num',text:`Порція ${Number(q.batch.replace('batch',''))} · №${q.batchOrdinal}`}));
+  link.append(h('span',{class:'saved-item-num',text:questionLabel(q)}));
   link.append(h('span',{text:q.question}));link.addEventListener('click',()=>openSavedQuestion(id));
   const del=button('Прибрати','remove-saved',()=>toggleSaved(id));del.setAttribute('aria-label',`Прибрати зі збережених: ${q.question}`);
   item.append(link,del);items.append(item);
@@ -366,7 +360,7 @@ function render(){
    text:savedQuestions.has(id)?'★ У збережених':'☆ Зберегти питання'});
  mark.addEventListener('click',()=>toggleSaved(id));headline.append(mark);
   if(mistakeHistory[id]?.active){const m=mistakeHistory[id];headline.append(h('span',{class:'question-mastering',text:`⚠ У типових помилках · ${m.streak}/${MASTERED_AT}`}))}
- line.append(headline,h('small',{text:`${SCOPE_NAMES[activeScope]} · ${state.mode==='review'?'Повторення помилок · ':''}Порція ${Number(q.batch.replace('batch',''))}, №${q.batchOrdinal}`}));top.append(line);
+ line.append(headline,h('small',{text:`${SCOPE_NAMES[activeScope]} · ${state.mode==='review'?'Повторення помилок · ':''}Порція ${batchNumber(q.batch)}, №${q.batchOrdinal}`}));top.append(line);
  const pr=h('div',{class:'progress'});pr.append(h('div',{class:'fill',style:`width:${100*(state.index+1)/state.order.length}%`}));top.append(pr);panel.append(top);
  const body=h('div',{class:'body'});body.append(h('h2',{class:'question',text:q.question}));
  const layout=h('div',{class:'question-layout '+(!q.diagram?'no-art':'')});
@@ -407,11 +401,27 @@ function reset(confirmIt=true){if(confirmIt&&!confirm(`Почати заново
 function shuffleAll(){if(!SCOPE_IDS[activeScope].length){notice(activeScope==='mistakes'?'У списку типових помилок поки немає питань.':'Спочатку збережіть хоча б одне питання.');return}if(!confirm(`Перемішати всі питання та відповіді набору «${SCOPE_NAMES[activeScope]}» і почати заново?`))return;
  const arr=[...SCOPE_IDS[activeScope]];for(let i=arr.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]]}
  state={order:arr,index:0,answers:{},mode:'normal'};answerOrders=createAnswerOrders(answerOrders);openOriginal=false;render()}
+const ARCHIVE_ORDINALS=['перший','другий','третій','четвертий','п’ятий','шостий','сьомий','восьмий','дев’ятий','десятий'];
+// Картки порцій і лічильники в шапці будуються з даних.
+function renderBatchCards(){
+ const all=document.querySelector('.batch-card[data-scope="all"]');
+ BATCHES.forEach((b,i)=>{
+  const card=h('button',{type:'button',class:'batch-card','data-scope':b.key});
+  card.append(h('b',{text:b.name}),h('span',{text:`${questionsCount(b.ids.length)} · ${ARCHIVE_ORDINALS[i]?ARCHIVE_ORDINALS[i]+' архів':'архів '+(i+1)}`}));
+  all.before(card);
+ });
+ const total=questionsCount(questions.length),batches=batchesCount(BATCHES.length);
+ document.getElementById('all-summary').textContent=`${total} · усі ${batches}`;
+ document.getElementById('summary-counts').textContent=`${batches} · ${total}`;
+ document.title=`Тренажер ПДР — ${total}, ${batches}, типові помилки`;
+}
 reconcileSavedSession();
+renderBatchCards();
 for(const btn of document.querySelectorAll('.batch-card'))btn.addEventListener('click',()=>switchScope(btn.dataset.scope));
 document.getElementById('reset').addEventListener('click',()=>reset(true));
 document.getElementById('shuffle').addEventListener('click',shuffleAll);
-document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','BUTTON','SELECT'].includes(document.activeElement?.tagName))return;
+// Стрілки ← → гортають питання, якщо фокус не в полі введення (кнопки не заважають).
+document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;
  if(e.key==='ArrowRight'&&state.index<state.order.length){state.index++;openOriginal=false;render()}
  if(e.key==='ArrowLeft'&&state.index>0){state.index--;openOriginal=false;render()}});
 render();
