@@ -163,7 +163,7 @@ async function importMistakes(file){
   const data=JSON.parse(await file.text());
   if(data?.type!=='pdr-typical-mistakes'||data.version!==1||!data.records||typeof data.records!=='object'||Array.isArray(data.records))throw Error('invalid');
   const valid=Object.entries(data.records).filter(([id,v])=>Q[Number(id)]&&v&&Number.isFinite(Number(v.wrongs))&&Number(v.wrongs)>0);
-  if(!confirm(`Імпортувати статистику (${valid.length} питань із історією помилок)? Поточна статистика буде замінена даними з файлу.`))return;
+  if(!await askConfirm(`У файлі ${questionsCount(valid.length)} з історією помилок. Поточну статистику буде замінено даними з файлу.`,{title:'Імпортувати статистику?',ok:'Імпортувати',danger:true}))return;
   for(const id of Object.keys(mistakeHistory))delete mistakeHistory[id];
   for(const [id,v] of valid){
    const streak=Math.max(0,Math.min(MASTERED_AT,Math.floor(Number(v.streak)||0)));
@@ -207,6 +207,19 @@ function fileButton(text,accept,label,onFiles,multiple=false){
  const input=h('input',{type:'file',accept,'aria-label':label});input.hidden=true;input.multiple=multiple;
  input.addEventListener('change',()=>{const files=[...input.files];input.value='';if(files.length)onFiles(files)});
  return [button(text,'',()=>input.click()),input];
+}
+// Власне вікно підтвердження замість window.confirm. <dialog> сам тримає фокус усередині, закривається Esc
+// і затемнює фон. Для руйнівних дій (danger) фокус на «Скасувати», щоб випадковий Enter нічого не зламав.
+function askConfirm(text,{title='Підтвердіть дію',ok='Так',cancel='Скасувати',danger=false}={}){
+ return new Promise(resolve=>{
+  const dialog=h('dialog',{class:'confirm-dialog','aria-labelledby':'confirm-title','aria-describedby':'confirm-text'}),box=h('div',{class:'confirm-box'});
+  const okBtn=button(ok,danger?'danger':'primary',()=>dialog.close('ok')),cancelBtn=button(cancel,'',()=>dialog.close('cancel'));
+  const actions=h('div',{class:'confirm-actions'});actions.append(cancelBtn,okBtn);
+  box.append(h('h2',{id:'confirm-title',text:title}),h('p',{id:'confirm-text',text}),actions);dialog.append(box);
+  dialog.addEventListener('click',e=>{if(e.target===dialog)dialog.close('cancel')}); // клік по затемненому фону
+  dialog.addEventListener('close',()=>{dialog.remove();resolve(dialog.returnValue==='ok')});
+  document.body.append(dialog);dialog.showModal();(danger?cancelBtn:okBtn).focus();
+ });
 }
 function downloadJson(payload,filename){
  const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
@@ -419,13 +432,13 @@ async function saveComment(id){
  if(empty)comments.delete(id);else comments.set(id,{html,images:draft.images,updatedAt});
  commentDrafts.delete(id);render();notice(empty?'Порожній коментар видалено.':'Коментар збережено.');
 }
-function cancelComment(id){
+async function cancelComment(id){
  const draft=commentDrafts.get(id);
- if(draft.dirty&&!confirm('Скасувати незбережені зміни в коментарі?'))return;
+ if(draft.dirty&&!await askConfirm('Незбережені зміни в коментарі буде втрачено.',{title:'Скасувати зміни?',ok:'Скасувати зміни',cancel:'Продовжити редагування',danger:true}))return;
  revokeUnused(draft.images,comments.get(id)?.images||[]);commentDrafts.delete(id);render();
 }
 async function deleteComment(id){
- if(!confirm('Видалити ваш коментар до цього питання разом із картинками?'))return;
+ if(!await askConfirm('Ваш коментар до цього питання буде видалено разом із картинками. Відновити його можна лише з резервної копії.',{title:'Видалити коментар?',ok:'Видалити',danger:true}))return;
  try{await commentsTx('readwrite',store=>store.delete(id))}catch(e){notice('Не вдалося видалити коментар.');return}
  revokeUnused(comments.get(id)?.images||[],[]);comments.delete(id);render();notice('Коментар видалено.');
 }
@@ -441,7 +454,7 @@ async function importComments(file){
   if(data?.type!=='pdr-comments'||data.version!==1||!data.records||typeof data.records!=='object'||Array.isArray(data.records))throw Error('invalid');
   const valid=Object.entries(data.records).filter(([id,r])=>Q[Number(id)]&&r&&typeof r.html==='string'&&Array.isArray(r.images));
   const replaced=valid.filter(([id])=>comments.has(Number(id))).length;
-  if(!confirm(`Імпортувати коментарі з файлу? Питань із коментарями: ${valid.length}.${replaced?` Для ${replaced} з них ваші поточні коментарі буде замінено.`:''}`))return;
+  if(!await askConfirm(`Питань із коментарями у файлі: ${valid.length}.${replaced?` Для ${replaced} з них ваші поточні коментарі буде замінено.`:''}`,{title:'Імпортувати коментарі?',ok:'Імпортувати',danger:replaced>0}))return;
   for(const [rawId,r] of valid){
    const images=await Promise.all(r.images.filter(src=>typeof src==='string'&&src.startsWith('data:image/')).map(src=>fetch(src).then(res=>res.blob())));
    const record={id:Number(rawId),html:cleanCommentHtml(r.html),images,updatedAt:Number(r.updatedAt)||Date.now()};
@@ -679,9 +692,9 @@ function results(st){const end=h('div',{class:'complete'});end.append(h('h2',{te
  if(activeScope==='mistakes')end.append(h('p',{text:`Залишилося активних типових помилок: ${SCOPE_IDS.mistakes.length}. Прогрес 1/3 і 2/3 зберігається під час повторних проходжень.`}));
   actions.append(button(`${SCOPE_NAMES[activeScope]} заново`,'',()=>reset(true)));end.append(actions);panel.append(end);layoutPagers();
 }
-function reset(confirmIt=true){if(confirmIt&&!confirm(`Почати заново: «${SCOPE_NAMES[activeScope]}»? Прогрес цього набору буде втрачено. Інші набори залишаться без змін. Історія типових помилок і серія правильних відповідей збережуться.`))return;
+async function reset(confirmIt=true){if(confirmIt&&!await askConfirm(`Прогрес набору «${SCOPE_NAMES[activeScope]}» буде втрачено. Інші набори залишаться без змін. Історія типових помилок і серія правильних відповідей збережуться.`,{title:'Почати заново?',ok:'Почати заново',danger:true}))return;
  state=newSession(activeScope);answerOrders=createAnswerOrders(answerOrders);openOriginal=false;render()}
-function shuffleAll(){if(!SCOPE_IDS[activeScope].length){notice(activeScope==='mistakes'?'У списку типових помилок поки немає питань.':'Спочатку збережіть хоча б одне питання.');return}if(!confirm(`Перемішати всі питання та відповіді набору «${SCOPE_NAMES[activeScope]}» і почати заново?`))return;
+async function shuffleAll(){if(!SCOPE_IDS[activeScope].length){notice(activeScope==='mistakes'?'У списку типових помилок поки немає питань.':'Спочатку збережіть хоча б одне питання.');return}if(!await askConfirm(`Питання й відповіді набору «${SCOPE_NAMES[activeScope]}» буде перемішано, а прогрес цього набору — скинуто.`,{title:'Перемішати й почати заново?',ok:'Перемішати',danger:true}))return;
  const arr=[...SCOPE_IDS[activeScope]];for(let i=arr.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]]}
  state={order:arr,index:0,answers:{},seen:[],mode:'normal'};answerOrders=createAnswerOrders(answerOrders);openOriginal=false;render()}
 const ARCHIVE_ORDINALS=['перший','другий','третій','четвертий','п’ятий','шостий','сьомий','восьмий','дев’ятий','десятий'];
@@ -704,7 +717,7 @@ for(const btn of document.querySelectorAll('.batch-card'))btn.addEventListener('
 document.getElementById('reset').addEventListener('click',()=>reset(true));
 document.getElementById('shuffle').addEventListener('click',shuffleAll);
 // Стрілки ← → гортають питання, якщо фокус не в полі введення чи редакторі коментаря (кнопки не заважають).
-document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)||document.activeElement?.isContentEditable)return;
+document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)||document.activeElement?.isContentEditable||document.querySelector('dialog[open]'))return;
  if(e.key==='ArrowRight'&&state.index<state.order.length){state.index++;openOriginal=false;render()}
  if(e.key==='ArrowLeft'&&state.index>0){state.index--;openOriginal=false;render()}});
 // Лише зміна ширини: на телефоні resize спрацьовує й тоді, коли ховається адресний рядок.

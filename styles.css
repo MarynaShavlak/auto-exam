@@ -144,3 +144,17 @@
 .legend-item.wrong::before{background:var(--red-bg);border-color:#d96d7a}
 .legend-item.skipped::before{background:#fff6dc;border:1px dashed #c8952a}
 .complete .pager-wrap{justify-content:center;max-width:900px;margin:20px auto 0}.complete .pager-legend{justify-content:center;margin-bottom:20px}
+
+/* Вікно підтвердження (askConfirm) */
+.confirm-dialog{width:min(440px,calc(100vw - 32px));padding:0;border:0;border-radius:16px;background:#fff;color:var(--ink);box-shadow:0 24px 64px #0b1a2e40}
+.confirm-dialog::backdrop{background:#0f1e3366;backdrop-filter:blur(2px)}
+.confirm-dialog[open]{animation:confirm-in .14s ease-out}
+@keyframes confirm-in{from{opacity:0;transform:translateY(8px) scale(.98)}}
+@media(prefers-reduced-motion:reduce){.confirm-dialog[open]{animation:none}}
+.confirm-box{padding:22px 22px 18px}
+.confirm-dialog h2{margin:0 0 8px;font-size:19px;letter-spacing:-.2px}
+.confirm-dialog p{margin:0 0 20px;color:#3b4f66;line-height:1.5}
+.confirm-actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.confirm-actions .btn:focus-visible{outline:3px solid #70adeb;outline-offset:2px}
+.btn.danger{background:var(--red);color:#fff;border-color:var(--red)}.btn.danger:hover:not(:disabled){background:#9e2238}
+@media(max-width:600px){.confirm-actions .btn{flex:1}}

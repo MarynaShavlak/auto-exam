@@ -27,6 +27,7 @@
 - Пагінація (`renderPager`) — стрічка в один рядок (`layoutPagers` підганяє ширину під ціле число кнопок, ‹ › гортають по сторінці) з номерами 1…N поточного набору з класами `correct` / `wrong` / `skipped` (відкривали без відповіді) / `unseen` + `current`; є над питанням і на екрані результатів. Новий спосіб створити `state` — не забувати `seen:[]`.
 - `render()` щоразу перебудовує всю панель; DOM будується через `h(tag, props, children)` і `button(text, css, handler, disabled)`; повідомлення — `notice()`.
 - Спільні помічники: `fileButton()` (кнопка + прихований `<input type=file>`), `downloadJson()` (експорт), `syncSessionOrder()` (підгонка сесії під новий список id), `questionLabel(q)` («Порція N · №M»).
+- Підтвердження дій — лише `await askConfirm(text, {title, ok, cancel, danger})` (власне вікно на `<dialog>`), не `window.confirm`. Для руйнівних дій `danger:true`.
 - Відповідь → `recordAttempt(id, isCorrect)` — єдине місце оновлення статистики помилок (помилка → 0/3, `MASTERED_AT=3` правильних поспіль → засвоєно).
 - Порядок відповідей перемішується при кожному завантаженні сторінки (`createAnswerOrders`).
 
