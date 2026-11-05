@@ -586,14 +586,39 @@ function renderPager(){
   item.addEventListener('click',()=>{state.index=i;openOriginal=false;render()});
   pager.append(item);
  });
+ const wrap=h('div',{class:'pager-wrap'});
+ const prev=h('button',{type:'button',class:'pager-arrow',text:'‹',title:'Попередні номери','aria-label':'Попередні номери питань'});
+ const next=h('button',{type:'button',class:'pager-arrow',text:'›',title:'Наступні номери','aria-label':'Наступні номери питань'});
+ prev.addEventListener('click',()=>pagerStep(pager,-1));next.addEventListener('click',()=>pagerStep(pager,1));
+ pager.addEventListener('scroll',()=>updatePagerArrows(pager));
+ wrap.append(prev,pager,next);
  const legend=h('div',{class:'pager-legend'});
  for(const [status,name] of Object.entries(PAGE_STATUS))legend.append(h('span',{class:'legend-item '+status,text:`${name}: ${counts[status]}`}));
- return [pager,legend];
+ return [wrap,legend];
 }
-// Довгий список прокручується всередині себе — тримаємо поточний номер у полі зору.
-function scrollPagerToCurrent(){
- const pager=panel.querySelector('.pager'),cur=pager?.querySelector('.current');
- if(cur&&pager.scrollHeight>pager.clientHeight)pager.scrollTop=cur.offsetTop-pager.clientHeight/2+cur.offsetHeight/2;
+// Стрічка показує стільки цілих номерів, скільки влазить у ширину; решта — прокруткою або стрілками ‹ ›,
+// які гортають по сторінці. Поточне питання завжди на видимій сторінці. Викликається після кожного render і resize.
+function layoutPagers(){
+ for(const pager of panel.querySelectorAll('.pager')){
+  const wrap=pager.parentElement,items=pager.children.length,first=pager.firstElementChild;if(!first)continue;
+  wrap.classList.remove('fits');pager.style.maxWidth='';
+  const stride=first.offsetWidth+parseFloat(getComputedStyle(pager).columnGap);
+  const fit=Math.max(1,Math.floor(pager.clientWidth/stride)),shown=Math.min(fit,items);
+  wrap.classList.toggle('fits',items<=fit);
+  pager.style.maxWidth=shown*stride+'px';pager.dataset.page=fit*stride;
+  const cur=[...pager.children].findIndex(b=>b.classList.contains('current'));
+  pager.scrollLeft=cur>0?Math.floor(cur/fit)*fit*stride:0;
+  updatePagerArrows(pager);
+ }
+}
+function pagerStep(pager,dir){
+ const page=Number(pager.dataset.page)||pager.clientWidth,at=pager.scrollLeft/page;
+ const target=dir>0?Math.floor(at+0.01)+1:Math.ceil(at-0.01)-1;
+ pager.scrollTo({left:Math.max(0,target)*page,behavior:'smooth'});
+}
+function updatePagerArrows(pager){
+ pager.previousElementSibling.disabled=pager.scrollLeft<=1;
+ pager.nextElementSibling.disabled=pager.scrollLeft+pager.clientWidth>=pager.scrollWidth-1;
 }
 function render(){
  markSeen();save();renderScopes();renderSavedLibrary();renderMistakeLibrary();renderCommentsBar();const st=stats();panel.replaceChildren();
@@ -642,7 +667,7 @@ function render(){
  panel.append(body);
  const footer=h('div',{class:'foot'});footer.append(button('← Попереднє','',()=>{openOriginal=false;state.index--;render()},state.index===0));
  const controls=h('div',{class:'right'});if(!done)controls.append(button('Пропустити','',()=>{openOriginal=false;state.index++;render()}));
- controls.append(button(state.index===state.order.length-1?'Результати →':'Наступне →','primary',()=>{openOriginal=false;state.index++;render()}));footer.append(controls);panel.append(footer);scrollPagerToCurrent();
+ controls.append(button(state.index===state.order.length-1?'Результати →':'Наступне →','primary',()=>{openOriginal=false;state.index++;render()}));footer.append(controls);panel.append(footer);layoutPagers();
 }
 function results(st){const end=h('div',{class:'complete'});end.append(h('h2',{text:'🏁 Результати тренування'}),h('p',{text:`${SCOPE_NAMES[activeScope]}. Правильно: ${st.ok} із ${state.order.length}. Помилок: ${st.bad}. Без відповіді: ${st.pending}.` }),...renderPager());
  const actions=h('div',{class:'buttons'});let missing=state.order.findIndex(id=>state.answers[id]===undefined);
@@ -652,7 +677,7 @@ function results(st){const end=h('div',{class:'complete'});end.append(h('h2',{te
   for(const id of state.order)delete state.answers[id];state.seen=[];state.index=0;state.mode='review';answerOrders=createAnswerOrders(answerOrders);render();
  }));
  if(activeScope==='mistakes')end.append(h('p',{text:`Залишилося активних типових помилок: ${SCOPE_IDS.mistakes.length}. Прогрес 1/3 і 2/3 зберігається під час повторних проходжень.`}));
-  actions.append(button(`${SCOPE_NAMES[activeScope]} заново`,'',()=>reset(true)));end.append(actions);panel.append(end);
+  actions.append(button(`${SCOPE_NAMES[activeScope]} заново`,'',()=>reset(true)));end.append(actions);panel.append(end);layoutPagers();
 }
 function reset(confirmIt=true){if(confirmIt&&!confirm(`Почати заново: «${SCOPE_NAMES[activeScope]}»? Прогрес цього набору буде втрачено. Інші набори залишаться без змін. Історія типових помилок і серія правильних відповідей збережуться.`))return;
  state=newSession(activeScope);answerOrders=createAnswerOrders(answerOrders);openOriginal=false;render()}
@@ -682,6 +707,8 @@ document.getElementById('shuffle').addEventListener('click',shuffleAll);
 document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)||document.activeElement?.isContentEditable)return;
  if(e.key==='ArrowRight'&&state.index<state.order.length){state.index++;openOriginal=false;render()}
  if(e.key==='ArrowLeft'&&state.index>0){state.index--;openOriginal=false;render()}});
+// Лише зміна ширини: на телефоні resize спрацьовує й тоді, коли ховається адресний рядок.
+let pagerWidth=innerWidth;window.addEventListener('resize',()=>{if(innerWidth!==pagerWidth){pagerWidth=innerWidth;layoutPagers()}});
 window.addEventListener('beforeunload',e=>{if([...commentDrafts.values()].some(d=>d.dirty)){e.preventDefault();e.returnValue=''}});
 render();
 loadComments();

@@ -24,7 +24,7 @@
 
 - Набори (scope): `batch1..5`, `all`, `saved`, `mistakes`, `mix:batch1+batch3`. Списки в `SCOPE_IDS`, назви в `SCOPE_NAMES`; мікси створює `ensureMixedScope`.
 - Сесія набору: `{order, index, answers, seen, mode:'normal'|'review'}`; перевірка — `cleanSession`. Кожен набір має окремий прогрес у `root.sessions`. `seen` — id відкритих питань (позначає `markSeen()` у `render()`).
-- Пагінація (`renderPager`) — номери 1…N поточного набору з класами `correct` / `wrong` / `skipped` (відкривали без відповіді) / `unseen` + `current`; є над питанням і на екрані результатів. Новий спосіб створити `state` — не забувати `seen:[]`.
+- Пагінація (`renderPager`) — стрічка в один рядок (`layoutPagers` підганяє ширину під ціле число кнопок, ‹ › гортають по сторінці) з номерами 1…N поточного набору з класами `correct` / `wrong` / `skipped` (відкривали без відповіді) / `unseen` + `current`; є над питанням і на екрані результатів. Новий спосіб створити `state` — не забувати `seen:[]`.
 - `render()` щоразу перебудовує всю панель; DOM будується через `h(tag, props, children)` і `button(text, css, handler, disabled)`; повідомлення — `notice()`.
 - Спільні помічники: `fileButton()` (кнопка + прихований `<input type=file>`), `downloadJson()` (експорт), `syncSessionOrder()` (підгонка сесії під новий список id), `questionLabel(q)` («Порція N · №M»).
 - Відповідь → `recordAttempt(id, isCorrect)` — єдине місце оновлення статистики помилок (помилка → 0/3, `MASTERED_AT=3` правильних поспіль → засвоєно).
