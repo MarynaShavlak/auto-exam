@@ -702,6 +702,10 @@ function render(){
   if(mistakeHistory[id]?.active){const m=mistakeHistory[id];headline.append(h('span',{class:'question-mastering',text:`⚠ У типових помилках · ${m.streak}/${MASTERED_AT}`}))}
  line.append(headline,h('small',{text:`${SCOPE_NAMES[activeScope]} · ${state.mode==='review'?'Повторення помилок · ':''}Порція ${batchNumber(q.batch)}, №${q.batchOrdinal}`}));top.append(line);
  const pr=h('div',{class:'progress'});pr.append(h('div',{class:'fill',style:`width:${100*(state.index+1)/state.order.length}%`}));top.append(pr,...renderPager());panel.append(top);
+ // Навігація над питанням: її положення не залежить від висоти питання.
+ const footer=h('div',{class:'foot'});footer.append(button('← Попереднє','',()=>{openOriginal=false;state.index--;render()},state.index===0));
+ const controls=h('div',{class:'right'});if(!done)controls.append(button('Пропустити','',()=>{openOriginal=false;state.index++;render()}));
+ controls.append(button(state.index===state.order.length-1?'Результати →':'Наступне →','primary',()=>{openOriginal=false;state.index++;render()}));footer.append(controls);panel.append(footer);
  const body=h('div',{class:'body'});body.append(h('h2',{class:'question',text:q.question}));
  const layout=h('div',{class:'question-layout '+(!q.diagram?'no-art':'')});
  if(q.diagram){const art=h('div',{class:'picture'});art.append(h('img',{src:q.diagram,alt:'Ілюстрація з оригінального скриншота'}));layout.append(art)}
@@ -722,10 +726,7 @@ function render(){
   }
  }else body.append(h('div',{class:'hint',text:'Оберіть відповідь. Варіанти відповіді щоразу перемішуються; їхня оригінальна нумерація збережена для питань із варіантами «1 і 2».'}));
  const comment=renderComment(id,done);if(comment)body.append(comment);
- panel.append(body);
- const footer=h('div',{class:'foot'});footer.append(button('← Попереднє','',()=>{openOriginal=false;state.index--;render()},state.index===0));
- const controls=h('div',{class:'right'});if(!done)controls.append(button('Пропустити','',()=>{openOriginal=false;state.index++;render()}));
- controls.append(button(state.index===state.order.length-1?'Результати →':'Наступне →','primary',()=>{openOriginal=false;state.index++;render()}));footer.append(controls);panel.append(footer);layoutPagers();
+ panel.append(body);layoutPagers();
 }
 function results(st){const end=h('div',{class:'complete'});end.append(h('h2',{text:'🏁 Результати тренування'}),h('p',{text:`${SCOPE_NAMES[activeScope]}. Правильно: ${st.ok} із ${state.order.length}. Помилок: ${st.bad}. Без відповіді: ${st.pending}.` }),...renderPager());
  const actions=h('div',{class:'buttons'});let missing=state.order.findIndex(id=>state.answers[id]===undefined);
