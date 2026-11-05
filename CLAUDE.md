@@ -1,6 +1,6 @@
 # Auto Exam — тренажер ПДР
 
-Статичний сайт без збірки й залежностей. Деплой: GitHub Pages з гілки `main` (корінь) → https://marynashavlak.github.io/auto-exam/. Кожен push у `main` одразу публікується, тому нові функції робимо в окремих гілках.
+Статичний сайт без збірки й залежностей. Деплой: GitHub Pages через workflow `.github/workflows/pages.yml` (викладає корінь гілки `main`) → https://marynashavlak.github.io/auto-exam/. Кожен push у `main` одразу публікується, тому нові функції робимо в окремих гілках.
 
 ## Файли
 
