@@ -78,7 +78,7 @@ function createAnswerOrders(previous={}){
 }
 let previousOrders={};try{previousOrders=JSON.parse(localStorage.getItem(LAYOUT_KEY)||'{}')||{}}catch(e){}
 let answerOrders=createAnswerOrders(previousOrders);
-function newSession(scope){const ids=[...SCOPE_IDS[scope]];return {order:(scope.startsWith(MIX_PREFIX)||scope==='mistakes')?shuffledIndices(ids.length).map(i=>ids[i]):ids,index:0,answers:{},mode:'normal'}}
+function newSession(scope){const ids=[...SCOPE_IDS[scope]];return {order:(scope.startsWith(MIX_PREFIX)||scope==='mistakes')?shuffledIndices(ids.length).map(i=>ids[i]):ids,index:0,answers:{},seen:[],mode:'normal'}}
 function cleanSession(s,scope){
  if(!s||!Array.isArray(s.order)||!s.order.length)return newSession(scope);
  const allowed=scope==='mistakes'?new Set(questions.map(q=>q.id)):new Set(SCOPE_IDS[scope]);
@@ -90,7 +90,10 @@ function cleanSession(s,scope){
  const answers={};for(const [id,val] of Object.entries(s.answers||{})){
   const q=Q[id];if(allowed.has(Number(id))&&Number.isInteger(val)&&val>=0&&val<q.answers.length)answers[id]=val;
  }
- return {order:s.order,index:Math.max(0,Math.min(Number(s.index)||0,s.order.length)),answers,mode:s.mode==='review'?'review':'normal'};
+ const index=Math.max(0,Math.min(Number(s.index)||0,s.order.length)),inOrder=new Set(s.order);
+ // seen — питання, які вже відкривали (для пагінації). У старих сесіях його немає: вважаємо відкритими всі до поточного.
+ const seen=Array.isArray(s.seen)?s.seen.filter(id=>inOrder.has(id)):s.order.slice(0,index);
+ return {order:s.order,index,answers,seen,mode:s.mode==='review'?'review':'normal'};
 }
 let root={active:'batch1',sessions:{},mixedSelection:[]};
 try{let found=JSON.parse(localStorage.getItem(STORAGE_KEY)||'null');if(found&&found.sessions)root={...root,...found}}catch(e){}
@@ -125,7 +128,7 @@ function syncSessionOrder(s,ids){
  if(before.length===after.length && before.every((id,i)=>id===after[i]))return;
  const current=before[s.index],answers={};
  for(const [key,val] of Object.entries(s.answers||{}))if(allowed.has(Number(key)))answers[key]=val;
- s.order=after;s.answers=answers;s.mode='normal';
+ s.order=after;s.answers=answers;s.seen=(s.seen||[]).filter(id=>allowed.has(id));s.mode='normal';
  s.index=current!==undefined&&after.includes(current)?after.indexOf(current):Math.min(Number(s.index)||0,Math.max(0,after.length-1));
 }
 // Коли тренування типових помилок не відкрите, оновлюємо його набір:
@@ -566,8 +569,34 @@ function stats(){const answered=state.order.filter(id=>state.answers[id]!==undef
  document.getElementById('pending').textContent=state.order.length-answered.length;
  return {ok,bad,pending:state.order.length-answered.length};
 }
+// Пагінація: номер кожного питання набору з кольором стану; клік відкриває питання.
+// Пропущене — відкривали, але не відповіли; поточне без відповіді рахується окремо.
+const PAGE_STATUS={correct:'Правильно',wrong:'Неправильно',skipped:'Пропущено',unseen:'Не відкривали'};
+function markSeen(){if(!Array.isArray(state.seen))state.seen=[];const id=state.order[state.index];if(id!==undefined&&!state.seen.includes(id))state.seen.push(id)}
+function renderPager(){
+ const seen=new Set(state.seen),current=state.order[state.index],counts={correct:0,wrong:0,skipped:0,unseen:0};
+ const pager=h('nav',{class:'pager','aria-label':'Номери питань набору'});
+ state.order.forEach((id,i)=>{
+  const answer=state.answers[id],isCurrent=id===current;
+  const status=answer!==undefined?(answer===Q[id].correct?'correct':'wrong'):isCurrent?'unseen':seen.has(id)?'skipped':'unseen';
+  if(!isCurrent||answer!==undefined)counts[status]++;
+  const label=`Питання ${i+1}: ${isCurrent&&answer===undefined?'поточне':PAGE_STATUS[status].toLowerCase()} · ${questionLabel(Q[id])}`;
+  const item=h('button',{type:'button',class:`page-item ${status}${isCurrent?' current':''}`,title:label,'aria-label':label,text:String(i+1)});
+  if(isCurrent)item.setAttribute('aria-current','step');
+  item.addEventListener('click',()=>{state.index=i;openOriginal=false;render()});
+  pager.append(item);
+ });
+ const legend=h('div',{class:'pager-legend'});
+ for(const [status,name] of Object.entries(PAGE_STATUS))legend.append(h('span',{class:'legend-item '+status,text:`${name}: ${counts[status]}`}));
+ return [pager,legend];
+}
+// Довгий список прокручується всередині себе — тримаємо поточний номер у полі зору.
+function scrollPagerToCurrent(){
+ const pager=panel.querySelector('.pager'),cur=pager?.querySelector('.current');
+ if(cur&&pager.scrollHeight>pager.clientHeight)pager.scrollTop=cur.offsetTop-pager.clientHeight/2+cur.offsetHeight/2;
+}
 function render(){
- save();renderScopes();renderSavedLibrary();renderMistakeLibrary();renderCommentsBar();const st=stats();panel.replaceChildren();
+ markSeen();save();renderScopes();renderSavedLibrary();renderMistakeLibrary();renderCommentsBar();const st=stats();panel.replaceChildren();
  if(activeScope==='saved'&&!savedQuestions.size){
   const empty=h('div',{class:'complete'});
    empty.append(h('h2',{text:'☆ Тут будуть питання для повторення'}),h('p',{text:'Збережіть будь-яке питання з інших порцій за допомогою кнопки ☆. Воно з’явиться тут, і ви зможете тренуватися на ньому скільки завгодно разів.'}));
@@ -589,7 +618,7 @@ function render(){
  mark.addEventListener('click',()=>toggleSaved(id));headline.append(mark,commentButton(id));
   if(mistakeHistory[id]?.active){const m=mistakeHistory[id];headline.append(h('span',{class:'question-mastering',text:`⚠ У типових помилках · ${m.streak}/${MASTERED_AT}`}))}
  line.append(headline,h('small',{text:`${SCOPE_NAMES[activeScope]} · ${state.mode==='review'?'Повторення помилок · ':''}Порція ${batchNumber(q.batch)}, №${q.batchOrdinal}`}));top.append(line);
- const pr=h('div',{class:'progress'});pr.append(h('div',{class:'fill',style:`width:${100*(state.index+1)/state.order.length}%`}));top.append(pr);panel.append(top);
+ const pr=h('div',{class:'progress'});pr.append(h('div',{class:'fill',style:`width:${100*(state.index+1)/state.order.length}%`}));top.append(pr,...renderPager());panel.append(top);
  const body=h('div',{class:'body'});body.append(h('h2',{class:'question',text:q.question}));
  const layout=h('div',{class:'question-layout '+(!q.diagram?'no-art':'')});
  if(q.diagram){const art=h('div',{class:'picture'});art.append(h('img',{src:q.diagram,alt:'Ілюстрація з оригінального скриншота'}));layout.append(art)}
@@ -613,14 +642,14 @@ function render(){
  panel.append(body);
  const footer=h('div',{class:'foot'});footer.append(button('← Попереднє','',()=>{openOriginal=false;state.index--;render()},state.index===0));
  const controls=h('div',{class:'right'});if(!done)controls.append(button('Пропустити','',()=>{openOriginal=false;state.index++;render()}));
- controls.append(button(state.index===state.order.length-1?'Результати →':'Наступне →','primary',()=>{openOriginal=false;state.index++;render()}));footer.append(controls);panel.append(footer);
+ controls.append(button(state.index===state.order.length-1?'Результати →':'Наступне →','primary',()=>{openOriginal=false;state.index++;render()}));footer.append(controls);panel.append(footer);scrollPagerToCurrent();
 }
-function results(st){const end=h('div',{class:'complete'});end.append(h('h2',{text:'🏁 Результати тренування'}),h('p',{text:`${SCOPE_NAMES[activeScope]}. Правильно: ${st.ok} із ${state.order.length}. Помилок: ${st.bad}. Пропущено: ${st.pending}.` }));
+function results(st){const end=h('div',{class:'complete'});end.append(h('h2',{text:'🏁 Результати тренування'}),h('p',{text:`${SCOPE_NAMES[activeScope]}. Правильно: ${st.ok} із ${state.order.length}. Помилок: ${st.bad}. Без відповіді: ${st.pending}.` }),...renderPager());
  const actions=h('div',{class:'buttons'});let missing=state.order.findIndex(id=>state.answers[id]===undefined);
  if(missing>=0)actions.append(button('Пройти пропущені','soft',()=>{state.index=missing;render()}));
  if(st.bad)actions.append(button(`Повторити помилки (${st.bad})`,'primary',()=>{
   state.order=state.order.filter(id=>state.answers[id]!==undefined&&state.answers[id]!==Q[id].correct);
-  for(const id of state.order)delete state.answers[id];state.index=0;state.mode='review';answerOrders=createAnswerOrders(answerOrders);render();
+  for(const id of state.order)delete state.answers[id];state.seen=[];state.index=0;state.mode='review';answerOrders=createAnswerOrders(answerOrders);render();
  }));
  if(activeScope==='mistakes')end.append(h('p',{text:`Залишилося активних типових помилок: ${SCOPE_IDS.mistakes.length}. Прогрес 1/3 і 2/3 зберігається під час повторних проходжень.`}));
   actions.append(button(`${SCOPE_NAMES[activeScope]} заново`,'',()=>reset(true)));end.append(actions);panel.append(end);
@@ -629,7 +658,7 @@ function reset(confirmIt=true){if(confirmIt&&!confirm(`Почати заново
  state=newSession(activeScope);answerOrders=createAnswerOrders(answerOrders);openOriginal=false;render()}
 function shuffleAll(){if(!SCOPE_IDS[activeScope].length){notice(activeScope==='mistakes'?'У списку типових помилок поки немає питань.':'Спочатку збережіть хоча б одне питання.');return}if(!confirm(`Перемішати всі питання та відповіді набору «${SCOPE_NAMES[activeScope]}» і почати заново?`))return;
  const arr=[...SCOPE_IDS[activeScope]];for(let i=arr.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]]}
- state={order:arr,index:0,answers:{},mode:'normal'};answerOrders=createAnswerOrders(answerOrders);openOriginal=false;render()}
+ state={order:arr,index:0,answers:{},seen:[],mode:'normal'};answerOrders=createAnswerOrders(answerOrders);openOriginal=false;render()}
 const ARCHIVE_ORDINALS=['перший','другий','третій','четвертий','п’ятий','шостий','сьомий','восьмий','дев’ятий','десятий'];
 // Картки порцій і лічильники в шапці будуються з даних.
 function renderBatchCards(){

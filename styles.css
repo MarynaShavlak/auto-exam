@@ -119,3 +119,23 @@
 .comments-bar small{display:block;color:var(--muted);font-size:12px;max-width:640px}
 .comments-bar-actions{display:flex;gap:8px;flex-wrap:wrap}.comments-bar-actions .btn{min-height:38px;padding:8px 11px;font-size:13px}
 @media(max-width:600px){.comment-section{padding:12px}.comment-images{grid-template-columns:1fr}.comment-icon-grid{grid-template-columns:repeat(5,38px)}}
+
+/* Пагінація питань: колір = стан, ✓/✕/пунктир — для тих, хто погано розрізняє кольори */
+.pager{position:relative;display:flex;flex-wrap:wrap;gap:6px;margin-top:13px;max-height:141px;overflow-y:auto;padding:3px;scrollbar-width:thin}
+.page-item{position:relative;min-width:36px;height:36px;padding:0 6px;border:1px solid #cbd6e3;border-radius:9px;background:#fff;color:#60748c;font-size:13px;font-weight:750;line-height:1}
+.page-item:hover{border-color:#619bda;background:#f0f7ff}
+.page-item:focus-visible{outline:3px solid #70adeb;outline-offset:1px}
+.page-item.correct{background:var(--green-bg);border-color:#42a97c;color:#10603f}
+.page-item.wrong{background:var(--red-bg);border-color:#d96d7a;color:#9e2238}
+.page-item.skipped{background:#fff6dc;border:1px dashed #c8952a;color:#7a5600}
+.page-item.correct::after,.page-item.wrong::after{position:absolute;top:2px;right:3px;font-size:9px;line-height:1}
+.page-item.correct::after{content:'✓'}.page-item.wrong::after{content:'✕'}
+.page-item.current{box-shadow:0 0 0 2px var(--blue);border-color:var(--blue)}
+.page-item.current.unseen{background:var(--blue-bg);color:var(--blue)}
+.pager-legend{display:flex;flex-wrap:wrap;gap:5px 16px;margin-top:9px;font-size:12px;color:var(--muted)}
+.legend-item::before{content:'';display:inline-block;width:11px;height:11px;margin-right:5px;vertical-align:-1px;border:1px solid #cbd6e3;border-radius:3px;background:#fff}
+.legend-item.correct::before{background:var(--green-bg);border-color:#42a97c}
+.legend-item.wrong::before{background:var(--red-bg);border-color:#d96d7a}
+.legend-item.skipped::before{background:#fff6dc;border:1px dashed #c8952a}
+.complete .pager{justify-content:center;max-width:900px;max-height:none;margin:20px auto 0}.complete .pager-legend{justify-content:center;margin-bottom:20px}
+@media(max-width:600px){.page-item{min-width:34px;height:34px}.pager{max-height:135px}}
