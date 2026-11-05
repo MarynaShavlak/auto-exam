@@ -80,3 +80,42 @@
 .question-mastering{display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap;border:1px solid #edc9a6;border-radius:9px;background:#fff5eb;color:#8d451f;padding:6px 10px;font-size:13px;font-weight:700}
 .question-mastered{color:#147e52;font-weight:650;font-size:13px;margin-top:13px}
 @media(max-width:700px){.mistake-items{grid-template-columns:1fr}.mistake-library-head{display:block}}
+
+/* Мої коментарі до питань */
+.comment-btn{border:1px solid #b9cde3;border-radius:10px;background:#fff;color:#245a8d;font-weight:700;padding:7px 11px;min-height:38px;font-size:14px}
+.comment-btn:hover{background:#f0f7ff}.comment-btn.has-comment{background:#eaf4ff;border-color:#7aacdd;color:#165f9f}
+.comment-btn:focus-visible{outline:3px solid #70adeb;outline-offset:2px}
+.comment-section{margin-top:18px;border:1px solid #c6d9ee;border-radius:13px;background:#f9fcff;padding:14px 16px}
+.comment-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.comment-section h3{margin:0;font-size:16px}
+.comment-actions{display:flex;gap:8px;flex-wrap:wrap}.comment-actions .btn{min-height:36px;padding:7px 12px;font-size:13px}
+.comment-section.editing .comment-actions{margin-top:12px}
+.comment-body,.comment-editor{line-height:1.55;overflow-wrap:anywhere}
+.comment-body{margin-top:10px}
+.comment-body :is(p,h3,h4,ul,ol,blockquote),.comment-editor :is(p,h3,h4,ul,ol,blockquote){margin:.4em 0}
+.comment-body :is(ul,ol),.comment-editor :is(ul,ol){padding-left:26px}
+.comment-body h3,.comment-editor h3{font-size:18px}
+.comment-body blockquote,.comment-editor blockquote{margin-left:28px;padding:0;border:0}
+.comment-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:3px;margin-top:10px;padding:6px;border:1px solid #cddbe9;border-bottom:0;border-radius:10px 10px 0 0;background:#fff}
+.comment-toolbar .tool{min-width:34px;height:34px;padding:0 6px;border:1px solid transparent;border-radius:7px;background:none;font-weight:800;color:#20425e}
+.comment-toolbar .tool:hover{border-color:#cde6ff;background:#eaf4ff}
+.comment-toolbar .tool-italic{font-style:italic}.comment-toolbar .tool-underline{text-decoration:underline}.comment-toolbar .tool-strikeThrough{text-decoration:line-through}
+.comment-toolbar .btn{min-height:34px;padding:4px 10px;font-size:13px}
+.comment-icons{position:relative}
+.comment-icons summary{list-style:none;cursor:pointer;height:34px;padding:0 9px;border-radius:7px;display:flex;align-items:center;font-size:13px;font-weight:700;color:#20425e}
+.comment-icons summary::-webkit-details-marker{display:none}.comment-icons summary:hover{background:#eaf4ff}
+.comment-icon-grid{position:absolute;z-index:5;top:38px;left:0;display:grid;grid-template-columns:repeat(6,38px);gap:2px;padding:6px;background:#fff;border:1px solid #cddbe9;border-radius:10px;box-shadow:0 8px 24px #0002}
+.comment-icon-grid .tool{font-size:18px}
+.comment-editor{min-height:130px;max-height:60vh;overflow:auto;padding:12px 14px;background:#fff;border:1px solid #cddbe9;border-radius:0 0 10px 10px;outline:none}
+.comment-editor:focus{border-color:#619bda;box-shadow:0 0 0 3px #70adeb40}
+.comment-editor:empty::before{content:attr(data-placeholder);color:var(--muted)}
+.comment-images{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));align-items:start;gap:10px;margin-top:12px}
+.comment-image{position:relative;margin:0;border:1px solid var(--line);border-radius:10px;background:#fff;overflow:hidden}
+.comment-image img{display:block;width:100%;height:auto;max-height:440px;object-fit:contain}
+.comment-image .btn{position:absolute;top:6px;right:6px;min-height:30px;padding:3px 9px;font-size:12px}
+.comment-help{margin:10px 0 0;color:var(--muted);font-size:12px}
+.comments-bar{margin-top:14px;padding:14px 18px;background:#fff;border:1px solid var(--line);border-radius:14px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.comments-bar[hidden]{display:none}
+.comments-bar small{display:block;color:var(--muted);font-size:12px;max-width:640px}
+.comments-bar-actions{display:flex;gap:8px;flex-wrap:wrap}.comments-bar-actions .btn{min-height:38px;padding:8px 11px;font-size:13px}
+@media(max-width:600px){.comment-section{padding:12px}.comment-images{grid-template-columns:1fr}.comment-icon-grid{grid-template-columns:repeat(5,38px)}}

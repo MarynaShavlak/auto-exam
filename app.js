@@ -313,6 +313,234 @@ function renderSavedLibrary(){
  section.append(items);
 }
 
+// ===== Мої коментарі до питань =====
+// Форматований текст і власні картинки до будь-якого питання в будь-якому наборі. Зберігаються в IndexedDB
+// (картинки як Blob), бо localStorage замалий для зображень. Ключ — id питання.
+const COMMENTS_DB='pdr-quiz-comments-v1',COMMENTS_STORE='comments';
+const comments=new Map(); // id → {html, images:[{blob,url}], updatedAt}
+const commentDrafts=new Map(); // id → {html, images, dirty} — відкриті редактори; переживають перехід між питаннями
+let commentsDb=null,commentOpen=null; // commentOpen — id питання, де коментар розгорнуто ще до відповіді
+function openCommentsDb(){
+ return new Promise((resolve,reject)=>{
+  const req=indexedDB.open(COMMENTS_DB,1);
+  req.onupgradeneeded=()=>req.result.createObjectStore(COMMENTS_STORE,{keyPath:'id'});
+  req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+ });
+}
+function commentsTx(mode,fn){
+ return new Promise((resolve,reject)=>{
+  const tx=commentsDb.transaction(COMMENTS_STORE,mode),req=fn(tx.objectStore(COMMENTS_STORE));
+  tx.oncomplete=()=>resolve(req?.result);tx.onerror=tx.onabort=()=>reject(tx.error);
+ });
+}
+function commentEntry(record){return {html:cleanCommentHtml(record.html||''),updatedAt:record.updatedAt,images:(record.images||[]).filter(b=>b instanceof Blob).map(blob=>({blob,url:URL.createObjectURL(blob)}))}}
+async function loadComments(){
+ try{
+  commentsDb=await openCommentsDb();
+  for(const record of await commentsTx('readonly',store=>store.getAll()))if(Q[record.id])comments.set(record.id,commentEntry(record));
+ }catch(e){commentsDb=null;notice('Коментарі недоступні: браузер не дозволяє зберігати дані.')}
+ render();
+}
+function revokeUnused(images,keep){for(const img of images)if(!keep.includes(img))URL.revokeObjectURL(img.url)}
+
+// Дозволене форматування: жирний, курсив, підкреслення, списки, відступи, заголовки, кольори.
+// Усе інше (скрипти, посилання, картинки, чужі стилі) прибирається — і з вставленого тексту, і з імпорту.
+const COMMENT_TAGS=new Set(['B','STRONG','I','EM','U','S','STRIKE','DEL','SUB','SUP','BR','HR','P','DIV','UL','OL','LI','BLOCKQUOTE','H3','H4','MARK','SPAN','FONT']);
+const COMMENT_DROP=new Set(['SCRIPT','STYLE','TEMPLATE','IFRAME','OBJECT','EMBED','SVG','MATH','IMG','PICTURE','VIDEO','AUDIO','CANVAS','FORM','INPUT','BUTTON','SELECT','TEXTAREA','HEAD','TITLE','META','LINK','NOSCRIPT']);
+const COMMENT_STYLES=['color','background-color','font-weight','font-style','text-decoration','text-align','margin-left','padding-left'];
+// Колір і накреслення з блоків (p, div, li…) переносимо на внутрішній span: Chrome відкидає стилі блоку,
+// коли вставляє його всередину іншого (наприклад, абзац у пункт списку).
+const COMMENT_BLOCKS=new Set(['P','DIV','LI','BLOCKQUOTE','H3','H4','UL','OL']),COMMENT_BLOCK_STYLES=['text-align','margin-left','padding-left'];
+function cleanCommentHtml(html){
+ const tpl=document.createElement('template');tpl.innerHTML=html;
+ (function walk(node){
+  for(const el of [...node.childNodes]){
+   if(el.nodeType===Node.TEXT_NODE)continue;
+   const tag=el.nodeType===Node.ELEMENT_NODE?el.tagName.toUpperCase():'';
+   if(!tag||COMMENT_DROP.has(tag)){el.remove();continue}
+   walk(el);
+   if(!COMMENT_TAGS.has(tag)){el.replaceWith(...el.childNodes);continue}
+   let style=COMMENT_STYLES.map(p=>[p,el.style.getPropertyValue(p)]).filter(([,v])=>v&&/^[#\w\s(),.%-]+$/.test(v));
+   const color=tag==='FONT'&&el.getAttribute('color');
+   for(const attr of [...el.attributes])el.removeAttribute(attr.name);
+   if(color&&/^#?\w+$/.test(color))style.push(['color',color]);
+   if(COMMENT_BLOCKS.has(tag)){
+    const inline=style.filter(([p])=>!COMMENT_BLOCK_STYLES.includes(p));
+    if(inline.length&&el.firstChild){const span=el.ownerDocument.createElement('span');span.setAttribute('style',inline.map(([p,v])=>`${p}:${v}`).join(';'));span.append(...el.childNodes);el.append(span)}
+    style=style.filter(([p])=>COMMENT_BLOCK_STYLES.includes(p));
+   }
+   if(style.length)el.setAttribute('style',style.map(([p,v])=>`${p}:${v}`).join(';'));
+  }
+ })(tpl.content);
+ return tpl.innerHTML;
+}
+function commentText(html){const tpl=document.createElement('template');tpl.innerHTML=html;return tpl.content.textContent.trim()}
+// Фото з телефону зменшуємо до 1600 px і стискаємо у WebP, щоб не забивати сховище браузера.
+async function shrinkImage(file,max=1600){
+ const bitmap=await createImageBitmap(file),scale=Math.min(1,max/Math.max(bitmap.width,bitmap.height));
+ const canvas=document.createElement('canvas');canvas.width=Math.round(bitmap.width*scale);canvas.height=Math.round(bitmap.height*scale);
+ canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();
+ const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/webp',0.85));
+ return blob&&blob.size<file.size?blob:file;
+}
+
+function editComment(id){
+ if(!commentsDb){notice('Коментарі недоступні в цьому браузері.');return}
+ if(!commentDrafts.has(id)){const c=comments.get(id);commentDrafts.set(id,{html:c?.html||'',images:[...(c?.images||[])],dirty:false})}
+ commentOpen=id;render();focusCommentEditor();
+}
+function focusCommentEditor(){
+ const editor=document.querySelector('.comment-editor');if(!editor)return;
+ editor.scrollIntoView({behavior:'smooth',block:'center'});editor.focus();
+ const range=document.createRange();range.selectNodeContents(editor);range.collapse(false);
+ const sel=getSelection();sel.removeAllRanges();sel.addRange(range);
+}
+function updateDraft(id,editor){const draft=commentDrafts.get(id);if(draft){draft.html=editor.innerHTML;draft.dirty=true}}
+async function addCommentImages(id,files){
+ const draft=commentDrafts.get(id);if(!draft)return;
+ for(const file of files.filter(f=>f.type.startsWith('image/'))){
+  try{const blob=await shrinkImage(file);draft.images.push({blob,url:URL.createObjectURL(blob)});draft.dirty=true}
+  catch(e){notice(`Не вдалося відкрити картинку «${file.name}».`)}
+ }
+ render();
+}
+function removeDraftImage(id,img){
+ const draft=commentDrafts.get(id);draft.images=draft.images.filter(i=>i!==img);draft.dirty=true;
+ revokeUnused([img],comments.get(id)?.images||[]);render();
+}
+async function saveComment(id){
+ const draft=commentDrafts.get(id),html=cleanCommentHtml(draft.html),empty=!commentText(html)&&!draft.images.length,updatedAt=Date.now();
+ try{await commentsTx('readwrite',store=>empty?store.delete(id):store.put({id,html,images:draft.images.map(i=>i.blob),updatedAt}))}
+ catch(e){notice('Не вдалося зберегти коментар. Можливо, у браузері закінчилося місце.');return}
+ revokeUnused(comments.get(id)?.images||[],draft.images);
+ if(empty)comments.delete(id);else comments.set(id,{html,images:draft.images,updatedAt});
+ commentDrafts.delete(id);render();notice(empty?'Порожній коментар видалено.':'Коментар збережено.');
+}
+function cancelComment(id){
+ const draft=commentDrafts.get(id);
+ if(draft.dirty&&!confirm('Скасувати незбережені зміни в коментарі?'))return;
+ revokeUnused(draft.images,comments.get(id)?.images||[]);commentDrafts.delete(id);render();
+}
+async function deleteComment(id){
+ if(!confirm('Видалити ваш коментар до цього питання разом із картинками?'))return;
+ try{await commentsTx('readwrite',store=>store.delete(id))}catch(e){notice('Не вдалося видалити коментар.');return}
+ revokeUnused(comments.get(id)?.images||[],[]);comments.delete(id);render();notice('Коментар видалено.');
+}
+function blobToDataUrl(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.readAsDataURL(blob)})}
+async function exportComments(){
+ const records={};
+ for(const [id,c] of comments)records[id]={html:c.html,updatedAt:c.updatedAt,images:await Promise.all(c.images.map(i=>blobToDataUrl(i.blob)))};
+ downloadJson({type:'pdr-comments',version:1,records,exportedAt:new Date().toISOString()},'pdr-moi-komentari.json');
+}
+async function importComments(file){
+ try{
+  const data=JSON.parse(await file.text());
+  if(data?.type!=='pdr-comments'||data.version!==1||!data.records||typeof data.records!=='object'||Array.isArray(data.records))throw Error('invalid');
+  const valid=Object.entries(data.records).filter(([id,r])=>Q[Number(id)]&&r&&typeof r.html==='string'&&Array.isArray(r.images));
+  const replaced=valid.filter(([id])=>comments.has(Number(id))).length;
+  if(!confirm(`Імпортувати коментарі з файлу? Питань із коментарями: ${valid.length}.${replaced?` Для ${replaced} з них ваші поточні коментарі буде замінено.`:''}`))return;
+  for(const [rawId,r] of valid){
+   const images=await Promise.all(r.images.filter(src=>typeof src==='string'&&src.startsWith('data:image/')).map(src=>fetch(src).then(res=>res.blob())));
+   const record={id:Number(rawId),html:cleanCommentHtml(r.html),images,updatedAt:Number(r.updatedAt)||Date.now()};
+   await commentsTx('readwrite',store=>store.put(record));
+   revokeUnused(comments.get(record.id)?.images||[],[]);comments.set(record.id,commentEntry(record));
+  }
+  render();notice(`Імпортовано коментарі: ${valid.length}.`);
+ }catch(e){notice('Не вдалося імпортувати коментарі. Перевірте JSON-файл.')}
+}
+
+const COMMENT_TOOLS=[
+ ['B','bold','Жирний (Ctrl+B)'],['I','italic','Курсив (Ctrl+I)'],['U','underline','Підкреслений (Ctrl+U)'],['S','strikeThrough','Закреслений'],
+ ['H','formatBlock','Заголовок','<h3>'],['¶','formatBlock','Звичайний текст','<div>'],
+ ['•','insertUnorderedList','Маркований список'],['1.','insertOrderedList','Нумерований список'],
+ ['⇤','outdent','Зменшити відступ (Shift+Tab)'],['⇥','indent','Збільшити відступ (Tab)'],
+ ['A','foreColor','Червоний текст','#c62828'],['A','foreColor','Зелений текст','#1b7f4b'],['A','foreColor','Синій текст','#176ac3'],
+ ['A','hiliteColor','Виділити маркером','#fff59d'],['🧹','removeFormat','Очистити форматування']
+];
+const COMMENT_ICONS=['⚠️','❗','❓','✅','❌','💡','📌','⭐','👉','➡️','⬅️','⬆️','⬇️','↩️','🔄','🚗','🚚','🚌','🏍️','🚲','🚶','🚦','🛑','⛔','🚸','🅿️','👮','📏','⏱️','🔢'];
+function commentToolbar(id,editor){
+ const bar=h('div',{class:'comment-toolbar',role:'toolbar','aria-label':'Форматування коментаря'});
+ // mousedown не забирає фокус і виділення з редактора.
+ bar.addEventListener('mousedown',e=>{if(e.target.closest('.tool,summary'))e.preventDefault()});
+ const run=(cmd,value)=>{editor.focus();document.execCommand('styleWithCSS',false,cmd==='foreColor'||cmd==='hiliteColor');document.execCommand(cmd,false,value);updateDraft(id,editor)};
+ for(const [label,cmd,title,value] of COMMENT_TOOLS){
+  const tool=h('button',{type:'button',class:'tool tool-'+cmd,title,'aria-label':title,text:label});
+  if(cmd==='foreColor')tool.style.color=value;else if(cmd==='hiliteColor')tool.style.background=value;
+  tool.addEventListener('click',()=>run(cmd,value));bar.append(tool);
+ }
+ const icons=h('details',{class:'comment-icons'}),grid=h('div',{class:'comment-icon-grid'});
+ icons.append(h('summary',{text:'😀 Іконки',title:'Вставити іконку'}),grid);
+ for(const icon of COMMENT_ICONS){const tool=h('button',{type:'button',class:'tool',text:icon,'aria-label':'Вставити '+icon});tool.addEventListener('click',()=>{run('insertText',icon);icons.open=false});grid.append(tool)}
+ bar.append(icons,...fileButton('🖼 Картинка','image/*','Додати картинку до коментаря',files=>addCommentImages(id,files),true));
+ return bar;
+}
+function commentImages(images,onRemove){
+ const list=h('div',{class:'comment-images'});
+ images.forEach((img,i)=>{
+  const item=h('figure',{class:'comment-image'}),link=h('a',{href:img.url,target:'_blank',rel:'noopener',title:'Відкрити в повному розмірі'});
+  link.append(h('img',{src:img.url,alt:`Моя картинка ${i+1}`}));item.append(link);
+  if(onRemove)item.append(button('✕ Прибрати','',()=>onRemove(img)));
+  list.append(item);
+ });
+ return list;
+}
+function renderCommentEditor(id,draft){
+ const box=h('section',{class:'comment-section editing','aria-label':'Редагування мого коментаря'});
+ box.append(h('h3',{text:'📝 Мій коментар'}));
+ const editor=h('div',{class:'comment-editor',contenteditable:'true',role:'textbox','aria-multiline':'true','aria-label':'Текст коментаря','data-placeholder':'Напишіть своє пояснення, підказку чи правило…'});
+ editor.innerHTML=cleanCommentHtml(draft.html);
+ editor.addEventListener('input',()=>updateDraft(id,editor));
+ editor.addEventListener('keydown',e=>{
+  if(e.key==='Tab'){e.preventDefault();document.execCommand(e.shiftKey?'outdent':'indent');updateDraft(id,editor)}
+  else if(e.key==='Escape')editor.blur();
+ });
+ editor.addEventListener('paste',e=>{
+  const files=[...(e.clipboardData?.files||[])];if(files.length){e.preventDefault();addCommentImages(id,files);return}
+  const html=e.clipboardData?.getData('text/html');if(html){e.preventDefault();document.execCommand('insertHTML',false,cleanCommentHtml(html))}
+ });
+ editor.addEventListener('drop',e=>{const files=[...(e.dataTransfer?.files||[])];if(files.length){e.preventDefault();addCommentImages(id,files)}});
+ box.append(commentToolbar(id,editor),editor);
+ if(draft.images.length)box.append(commentImages(draft.images,img=>removeDraftImage(id,img)));
+ const actions=h('div',{class:'comment-actions'});
+ actions.append(button('Зберегти коментар','primary',()=>saveComment(id)),button('Скасувати','',()=>cancelComment(id)));
+ box.append(actions,h('p',{class:'comment-help',text:'Tab — більший відступ, Shift+Tab — менший. Ctrl+B / Ctrl+I / Ctrl+U — жирний, курсив, підкреслення. Картинку можна вставити з буфера обміну (Ctrl+V) або перетягнути в поле.'}));
+ return box;
+}
+function renderCommentView(id,c,done){
+ const box=h('section',{class:'comment-section','aria-label':'Мій коментар'});
+ const head=h('div',{class:'comment-head'}),actions=h('div',{class:'comment-actions'});
+ actions.append(button('✎ Редагувати','',()=>editComment(id)),button('Видалити','',()=>deleteComment(id)));
+ if(!done)actions.append(button('Згорнути','',()=>{commentOpen=null;render()}));
+ head.append(h('h3',{text:'📝 Мій коментар'}),actions);box.append(head);
+ if(commentText(c.html)){const text=h('div',{class:'comment-body'});text.innerHTML=c.html;box.append(text)}
+ if(c.images.length)box.append(commentImages(c.images));
+ return box;
+}
+function renderComment(id,done){
+ const draft=commentDrafts.get(id);if(draft)return renderCommentEditor(id,draft);
+ const c=comments.get(id);
+ // До відповіді коментар захований (щоб не підказував) — його відкриває кнопка «📝 Мій коментар».
+ if(c&&(done||commentOpen===id))return renderCommentView(id,c,done);
+ if(!c&&done&&commentsDb){const add=h('button',{type:'button',class:'link',text:'📝 Додати свій коментар до цього питання'});add.addEventListener('click',()=>editComment(id));return h('div',{},[add])}
+ return null;
+}
+function commentButton(id){
+ const has=comments.has(id),b=h('button',{type:'button',class:'comment-btn'+(has?' has-comment':''),text:has?'📝 Мій коментар':'📝 Додати коментар','aria-label':has?'Показати мій коментар':'Додати мій коментар до питання'});
+ b.addEventListener('click',()=>{
+  if(commentDrafts.has(id))return focusCommentEditor();
+  if(!has)return editComment(id);
+  commentOpen=id;render();document.querySelector('.comment-section')?.scrollIntoView({behavior:'smooth',block:'nearest'});
+ });
+ return b;
+}
+function renderCommentsBar(){
+ const bar=document.getElementById('comments-bar');bar.hidden=!commentsDb;bar.replaceChildren();if(!commentsDb)return;
+ const info=h('div');info.append(h('b',{text:`📝 Мої коментарі: ${comments.size}`}),h('small',{text:'Коментарі й картинки зберігаються лише в цьому браузері. Зробіть резервну копію, щоб не втратити їх або перенести на інший пристрій.'}));
+ const actions=h('div',{class:'comments-bar-actions'});
+ actions.append(button('Експорт коментарів','',exportComments,!comments.size),...fileButton('Імпорт коментарів','application/json,.json','Імпортувати коментарі з JSON-файлу',files=>importComments(files[0])));
+ bar.append(info,actions);
+}
+
 function switchScope(scope){
  if(scope==='multi'){
   mixedPickerOpen=!mixedPickerOpen;
@@ -339,7 +567,7 @@ function stats(){const answered=state.order.filter(id=>state.answers[id]!==undef
  return {ok,bad,pending:state.order.length-answered.length};
 }
 function render(){
- save();renderScopes();renderSavedLibrary();renderMistakeLibrary();const st=stats();panel.replaceChildren();
+ save();renderScopes();renderSavedLibrary();renderMistakeLibrary();renderCommentsBar();const st=stats();panel.replaceChildren();
  if(activeScope==='saved'&&!savedQuestions.size){
   const empty=h('div',{class:'complete'});
    empty.append(h('h2',{text:'☆ Тут будуть питання для повторення'}),h('p',{text:'Збережіть будь-яке питання з інших порцій за допомогою кнопки ☆. Воно з’явиться тут, і ви зможете тренуватися на ньому скільки завгодно разів.'}));
@@ -358,7 +586,7 @@ function render(){
    'aria-pressed':savedQuestions.has(id)?'true':'false',
    'aria-label':savedQuestions.has(id)?'Прибрати питання зі збережених':'Зберегти питання для повторення',
    text:savedQuestions.has(id)?'★ У збережених':'☆ Зберегти питання'});
- mark.addEventListener('click',()=>toggleSaved(id));headline.append(mark);
+ mark.addEventListener('click',()=>toggleSaved(id));headline.append(mark,commentButton(id));
   if(mistakeHistory[id]?.active){const m=mistakeHistory[id];headline.append(h('span',{class:'question-mastering',text:`⚠ У типових помилках · ${m.streak}/${MASTERED_AT}`}))}
  line.append(headline,h('small',{text:`${SCOPE_NAMES[activeScope]} · ${state.mode==='review'?'Повторення помилок · ':''}Порція ${batchNumber(q.batch)}, №${q.batchOrdinal}`}));top.append(line);
  const pr=h('div',{class:'progress'});pr.append(h('div',{class:'fill',style:`width:${100*(state.index+1)/state.order.length}%`}));top.append(pr);panel.append(top);
@@ -381,6 +609,7 @@ function render(){
    if(openOriginal){const orig=h('div',{class:'original-section'});orig.append(h('img',{src:q.original,alt:'Оригінальний скриншот із відповіддю'}));if(q.notes?.length){orig.append(h('h3',{text:'Додаткові пояснення з архіву'}));q.notes.forEach((src,i)=>orig.append(h('img',{src,alt:`Пояснення ${i+1}`})))}body.append(orig)}
   }
  }else body.append(h('div',{class:'hint',text:'Оберіть відповідь. Варіанти відповіді щоразу перемішуються; їхня оригінальна нумерація збережена для питань із варіантами «1 і 2».'}));
+ const comment=renderComment(id,done);if(comment)body.append(comment);
  panel.append(body);
  const footer=h('div',{class:'foot'});footer.append(button('← Попереднє','',()=>{openOriginal=false;state.index--;render()},state.index===0));
  const controls=h('div',{class:'right'});if(!done)controls.append(button('Пропустити','',()=>{openOriginal=false;state.index++;render()}));
@@ -420,8 +649,10 @@ renderBatchCards();
 for(const btn of document.querySelectorAll('.batch-card'))btn.addEventListener('click',()=>switchScope(btn.dataset.scope));
 document.getElementById('reset').addEventListener('click',()=>reset(true));
 document.getElementById('shuffle').addEventListener('click',shuffleAll);
-// Стрілки ← → гортають питання, якщо фокус не в полі введення (кнопки не заважають).
-document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;
+// Стрілки ← → гортають питання, якщо фокус не в полі введення чи редакторі коментаря (кнопки не заважають).
+document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)||document.activeElement?.isContentEditable)return;
  if(e.key==='ArrowRight'&&state.index<state.order.length){state.index++;openOriginal=false;render()}
  if(e.key==='ArrowLeft'&&state.index>0){state.index--;openOriginal=false;render()}});
+window.addEventListener('beforeunload',e=>{if([...commentDrafts.values()].some(d=>d.dirty)){e.preventDefault();e.returnValue=''}});
 render();
+loadComments();
