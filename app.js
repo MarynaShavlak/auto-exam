@@ -31,8 +31,8 @@ function activeMistakeIds(){
  return Object.keys(mistakeHistory).map(Number).filter(id=>mistakeHistory[id].active).sort((a,b)=>
   mistakeHistory[b].wrongs-mistakeHistory[a].wrongs || mistakeHistory[b].lastWrong-mistakeHistory[a].lastWrong || a-b);
 }
-const SCOPE_IDS={...Object.fromEntries(BATCHES.map(b=>[b.key,b.ids])),all:questions.map(q=>q.id),saved:[...savedQuestions],mistakes:activeMistakeIds()};
-const SCOPE_NAMES={...Object.fromEntries(BATCHES.map(b=>[b.key,b.name])),all:'Усі питання',saved:'Збережені питання',mistakes:'Найчастіші помилки'};
+const SCOPE_IDS={...Object.fromEntries(BATCHES.map(b=>[b.key,b.ids])),all:questions.map(q=>q.id),saved:[...savedQuestions],mistakes:activeMistakeIds(),commented:[]};
+const SCOPE_NAMES={...Object.fromEntries(BATCHES.map(b=>[b.key,b.name])),all:'Усі питання',saved:'Збережені питання',mistakes:'Найчастіші помилки',commented:'З моїми коментарями'};
 // Кожна комбінація має власний ключ сесії: mix:batch1+batch3, mix:batch2+batch3 тощо.
 // Це зберігає незалежний прогрес без зміни існуючих порцій, all і saved.
 const MIX_PREFIX='mix:';
@@ -81,12 +81,15 @@ let answerOrders=createAnswerOrders(previousOrders);
 function newSession(scope){const ids=[...SCOPE_IDS[scope]];return {order:(scope.startsWith(MIX_PREFIX)||scope==='mistakes')?shuffledIndices(ids.length).map(i=>ids[i]):ids,index:0,answers:{},seen:[],mode:'normal'}}
 function cleanSession(s,scope){
  if(!s||!Array.isArray(s.order)||!s.order.length)return newSession(scope);
- const allowed=scope==='mistakes'?new Set(questions.map(q=>q.id)):new Set(SCOPE_IDS[scope]);
+ // Списки помилок і коментарів змінюються під час роботи (коментарі ще й вантажаться асинхронно),
+ // тож їхні сесії не скидаємо, а підганяємо пізніше через syncSessionOrder.
+ const dynamic=scope==='mistakes'||scope==='commented';
+ const allowed=dynamic?new Set(questions.map(q=>q.id)):new Set(SCOPE_IDS[scope]);
   if(s.order.some(id=>!allowed.has(id))||new Set(s.order).size!==s.order.length)return newSession(scope);
  // Regular run should contain exactly the selected scope. Review runs can be shorter.
  // Нові питання (наприклад, додані в порцію) дописуємо в кінець, не скидаючи прогрес.
  // У тренуванні помилок засвоєне питання залишається на екрані до переходу далі.
- if(s.mode!=='review'&&scope!=='mistakes'&&s.order.length!==allowed.size)s.order=[...s.order,...SCOPE_IDS[scope].filter(id=>!s.order.includes(id))];
+ if(s.mode!=='review'&&!dynamic&&s.order.length!==allowed.size)s.order=[...s.order,...SCOPE_IDS[scope].filter(id=>!s.order.includes(id))];
  const answers={};for(const [id,val] of Object.entries(s.answers||{})){
   const q=Q[id];if(allowed.has(Number(id))&&Number.isInteger(val)&&val>=0&&val<q.answers.length)answers[id]=val;
  }
@@ -237,8 +240,10 @@ function renderScopes(){
  document.getElementById('multi-summary').textContent=picked
   ? `${picked.map(b=>b.name).join(' + ')} · ${questionsCount(SCOPE_IDS[activeScope].length)}`
   : (mixedDraft.size>=2?`${BATCHES.filter(b=>mixedDraft.has(b.key)).map(b=>b.name).join(' + ')} · вибрати`: 'Обрати 2 або більше порцій');
- document.getElementById('saved-count').textContent=savedQuestions.size;
-  document.getElementById('mistake-count').textContent=SCOPE_IDS.mistakes.length;
+ // Лічильник у картці й узгоджене слово після нього: «1 питання», «5 питань».
+ for(const [elId,n] of [['saved-count',savedQuestions.size],['mistake-count',SCOPE_IDS.mistakes.length],['commented-count',SCOPE_IDS.commented.length]]){
+  const el=document.getElementById(elId);el.textContent=n;el.nextSibling.textContent=el.nextSibling.textContent.replace(/^\s*\S+/,' '+questionsCount(n).replace(/^\d+ /,''));
+ }
   renderMixedPicker();
 }
 function renderMixedPicker(){
@@ -288,10 +293,11 @@ function toggleSaved(id){
  openOriginal=false;render();
  notice(wasSaved?'Питання прибрано зі збережених.':'Питання додано до збережених.');
 }
-function openSavedQuestion(id){
- if(activeScope!=='saved')switchScope('saved');
+// Відкриває питання зі списку («Збережені», «З моїми коментарями») у відповідному наборі.
+function openInScope(scope,id){
+ if(activeScope!==scope)switchScope(scope);
  if(!state.order.includes(id)){
-  state.order=[...SCOPE_IDS.saved];state.mode='normal';
+  state.order=[...SCOPE_IDS[scope]];state.mode='normal';
  }
  state.index=state.order.indexOf(id);openOriginal=false;render();
  document.getElementById('panel').scrollIntoView({behavior:'smooth',block:'start'});
@@ -322,7 +328,7 @@ function renderSavedLibrary(){
   const q=Q[id];const item=h('div',{class:'saved-item'});
   const link=h('button',{class:'saved-jump',type:'button',title:q.question});
   link.append(h('span',{class:'saved-item-num',text:questionLabel(q)}));
-  link.append(h('span',{text:q.question}));link.addEventListener('click',()=>openSavedQuestion(id));
+  link.append(h('span',{text:q.question}));link.addEventListener('click',()=>openInScope('saved',id));
   const del=button('Прибрати','remove-saved',()=>toggleSaved(id));del.setAttribute('aria-label',`Прибрати зі збережених: ${q.question}`);
   item.append(link,del);items.append(item);
  }
@@ -335,7 +341,8 @@ function renderSavedLibrary(){
 const COMMENTS_DB='pdr-quiz-comments-v1',COMMENTS_STORE='comments';
 const comments=new Map(); // id → {html, images:[{blob,url}], updatedAt}
 const commentDrafts=new Map(); // id → {html, images, dirty} — відкриті редактори; переживають перехід між питаннями
-let commentsDb=null,commentOpen=null; // commentOpen — id питання, де коментар розгорнуто ще до відповіді
+const commentHidden=new Set(); // id, де коментар згорнули після відповіді; нова відповідь знову його показує
+let commentsDb=null,commentOpen=null,commentsReady=false; // commentOpen — id питання, де коментар розгорнуто ще до відповіді
 function openCommentsDb(){
  return new Promise((resolve,reject)=>{
   const req=indexedDB.open(COMMENTS_DB,1);
@@ -355,7 +362,33 @@ async function loadComments(){
   commentsDb=await openCommentsDb();
   for(const record of await commentsTx('readonly',store=>store.getAll()))if(Q[record.id])comments.set(record.id,commentEntry(record));
  }catch(e){commentsDb=null;notice('Коментарі недоступні: браузер не дозволяє зберігати дані.')}
- render();
+ commentsReady=true;reconcileCommentedSession();render();
+}
+// Набір «З моїми коментарями» — питання з коментарем у порядку порцій. Оновлюється після кожної зміни коментарів.
+function reconcileCommentedSession(){
+ SCOPE_IDS.commented=questions.filter(q=>comments.has(q.id)).map(q=>q.id);
+ const s=activeScope==='commented'?state:root.sessions.commented;
+ if(s)syncSessionOrder(s,SCOPE_IDS.commented);
+}
+// Текст коментаря для попереднього перегляду: між блоками ставимо пробіли, щоб слова не злипалися.
+function commentPreview(c){
+ const text=commentText(c.html.replace(/<(br|\/p|\/div|\/li|\/h3|\/h4|\/blockquote)\b[^>]*>/gi,' $&')).replace(/\s+/g,' ');
+ const pics=c.images.length?` 🖼 ${plural(c.images.length,'картинка','картинки','картинок')}`:'';
+ return '📝 '+text+pics;
+}
+function renderCommentedLibrary(){
+ const section=document.getElementById('commented-library');section.hidden=activeScope!=='commented';section.replaceChildren();
+ if(activeScope!=='commented')return;
+ const head=h('div',{class:'saved-library-head'});head.append(h('h3',{text:`📝 Питання з моїми коментарями (${SCOPE_IDS.commented.length})`}));section.append(head);
+ if(!SCOPE_IDS.commented.length){section.append(h('p',{class:'saved-empty',text:commentsReady?'Поки немає коментарів. Натисніть «📝 Додати коментар» біля будь-якого питання в будь-якому наборі.':'Завантажую коментарі…'}));return}
+ section.append(h('p',{class:'saved-library-note',text:'Тут видно початок кожного коментаря. Натисніть на питання, щоб відкрити його в тренуванні: повний коментар з’явиться після відповіді або за кнопкою «📝 Мій коментар».'}));
+ const items=h('div',{class:'saved-items'});
+ for(const id of SCOPE_IDS.commented){
+  const q=Q[id],item=h('div',{class:'saved-item'}),link=h('button',{class:'saved-jump',type:'button',title:q.question});
+  link.append(h('span',{class:'saved-item-num',text:questionLabel(q)}),h('span',{text:q.question}),h('span',{class:'comment-snippet',text:commentPreview(comments.get(id))}));
+  link.addEventListener('click',()=>openInScope('commented',id));item.append(link);items.append(item);
+ }
+ section.append(items);
 }
 function revokeUnused(images,keep){for(const img of images)if(!keep.includes(img))URL.revokeObjectURL(img.url)}
 
@@ -430,7 +463,7 @@ async function saveComment(id){
  catch(e){notice('Не вдалося зберегти коментар. Можливо, у браузері закінчилося місце.');return}
  revokeUnused(comments.get(id)?.images||[],draft.images);
  if(empty)comments.delete(id);else comments.set(id,{html,images:draft.images,updatedAt});
- commentDrafts.delete(id);render();notice(empty?'Порожній коментар видалено.':'Коментар збережено.');
+ commentDrafts.delete(id);reconcileCommentedSession();render();notice(empty?'Порожній коментар видалено.':'Коментар збережено.');
 }
 async function cancelComment(id){
  const draft=commentDrafts.get(id);
@@ -440,7 +473,7 @@ async function cancelComment(id){
 async function deleteComment(id){
  if(!await askConfirm('Ваш коментар до цього питання буде видалено разом із картинками. Відновити його можна лише з резервної копії.',{title:'Видалити коментар?',ok:'Видалити',danger:true}))return;
  try{await commentsTx('readwrite',store=>store.delete(id))}catch(e){notice('Не вдалося видалити коментар.');return}
- revokeUnused(comments.get(id)?.images||[],[]);comments.delete(id);render();notice('Коментар видалено.');
+ revokeUnused(comments.get(id)?.images||[],[]);comments.delete(id);reconcileCommentedSession();render();notice('Коментар видалено.');
 }
 function blobToDataUrl(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.readAsDataURL(blob)})}
 async function exportComments(){
@@ -461,7 +494,7 @@ async function importComments(file){
    await commentsTx('readwrite',store=>store.put(record));
    revokeUnused(comments.get(record.id)?.images||[],[]);comments.set(record.id,commentEntry(record));
   }
-  render();notice(`Імпортовано коментарі: ${valid.length}.`);
+  reconcileCommentedSession();render();notice(`Імпортовано коментарі: ${valid.length}.`);
  }catch(e){notice('Не вдалося імпортувати коментарі. Перевірте JSON-файл.')}
 }
 
@@ -522,11 +555,11 @@ function renderCommentEditor(id,draft){
  box.append(actions,h('p',{class:'comment-help',text:'Tab — більший відступ, Shift+Tab — менший. Ctrl+B / Ctrl+I / Ctrl+U — жирний, курсив, підкреслення. Картинку можна вставити з буфера обміну (Ctrl+V) або перетягнути в поле.'}));
  return box;
 }
-function renderCommentView(id,c,done){
+function renderCommentView(id,c){
  const box=h('section',{class:'comment-section','aria-label':'Мій коментар'});
  const head=h('div',{class:'comment-head'}),actions=h('div',{class:'comment-actions'});
  actions.append(button('✎ Редагувати','',()=>editComment(id)),button('Видалити','',()=>deleteComment(id)));
- if(!done)actions.append(button('Згорнути','',()=>{commentOpen=null;render()}));
+ actions.append(button('Згорнути','',()=>collapseComment(id)));
  head.append(h('h3',{text:'📝 Мій коментар'}),actions);box.append(head);
  if(commentText(c.html)){const text=h('div',{class:'comment-body'});text.innerHTML=c.html;box.append(text)}
  if(c.images.length)box.append(commentImages(c.images));
@@ -535,17 +568,23 @@ function renderCommentView(id,c,done){
 function renderComment(id,done){
  const draft=commentDrafts.get(id);if(draft)return renderCommentEditor(id,draft);
  const c=comments.get(id);
- // До відповіді коментар захований (щоб не підказував) — його відкриває кнопка «📝 Мій коментар».
- if(c&&(done||commentOpen===id))return renderCommentView(id,c,done);
+ if(c&&commentVisible(id))return renderCommentView(id,c);
  if(!c&&done&&commentsDb){const add=h('button',{type:'button',class:'link',text:'📝 Додати свій коментар до цього питання'});add.addEventListener('click',()=>editComment(id));return h('div',{},[add])}
  return null;
 }
+// До відповіді коментар захований (щоб не підказував) — його відкриває кнопка «📝 Мій коментар».
+// Після відповіді показується сам, доки його не згорнули; нова відповідь на питання знову його показує.
+function commentVisible(id){return commentOpen===id||(state.answers[id]!==undefined&&!commentHidden.has(id))}
+function collapseComment(id){if(commentOpen===id)commentOpen=null;commentHidden.add(id);render()}
 function commentButton(id){
- const has=comments.has(id),b=h('button',{type:'button',class:'comment-btn'+(has?' has-comment':''),text:has?'📝 Мій коментар':'📝 Додати коментар','aria-label':has?'Показати мій коментар':'Додати мій коментар до питання'});
+ const has=comments.has(id),shown=has&&commentVisible(id);
+ const b=h('button',{type:'button',class:'comment-btn'+(has?' has-comment':''),text:has?'📝 Мій коментар':'📝 Додати коментар','aria-label':has?(shown?'Згорнути мій коментар':'Показати мій коментар'):'Додати мій коментар до питання'});
+ if(has)b.setAttribute('aria-expanded',String(shown));
  b.addEventListener('click',()=>{
   if(commentDrafts.has(id))return focusCommentEditor();
   if(!has)return editComment(id);
-  commentOpen=id;render();document.querySelector('.comment-section')?.scrollIntoView({behavior:'smooth',block:'nearest'});
+  if(shown)return collapseComment(id);
+  commentOpen=id;commentHidden.delete(id);render();document.querySelector('.comment-section')?.scrollIntoView({behavior:'smooth',block:'nearest'});
  });
  return b;
 }
@@ -569,6 +608,7 @@ function switchScope(scope){
   if(scope===activeScope){mixedPickerOpen=false;renderScopes();return}
  save();activeScope=scope;state=cleanSession(root.sessions[scope],scope);
  if(scope==='saved')reconcileSavedSession();
+ if(scope==='commented')reconcileCommentedSession();
  if(scope.startsWith(MIX_PREFIX)){
   root.mixedSelection=getValidMixedBatches(scope).map(b=>b.key);
   mixedDraft=new Set(root.mixedSelection);
@@ -634,7 +674,7 @@ function updatePagerArrows(pager){
  pager.nextElementSibling.disabled=pager.scrollLeft+pager.clientWidth>=pager.scrollWidth-1;
 }
 function render(){
- markSeen();save();renderScopes();renderSavedLibrary();renderMistakeLibrary();renderCommentsBar();const st=stats();panel.replaceChildren();
+ markSeen();save();renderScopes();renderSavedLibrary();renderMistakeLibrary();renderCommentedLibrary();renderCommentsBar();const st=stats();panel.replaceChildren();
  if(activeScope==='saved'&&!savedQuestions.size){
   const empty=h('div',{class:'complete'});
    empty.append(h('h2',{text:'☆ Тут будуть питання для повторення'}),h('p',{text:'Збережіть будь-яке питання з інших порцій за допомогою кнопки ☆. Воно з’явиться тут, і ви зможете тренуватися на ньому скільки завгодно разів.'}));
@@ -644,6 +684,11 @@ function render(){
    const empty=h('div',{class:'complete'});
    empty.append(h('h2',{text:'✓ Немає типових помилок'}),h('p',{text:'Кожна неправильна відповідь із будь-якої порції, змішаного тренування або зі збережених автоматично з’явиться тут. Питання буде вилучено лише після трьох правильних відповідей поспіль.'}));
    empty.append(button('Перейти до порції 1','primary',()=>switchScope('batch1')));panel.append(empty);return;
+  }
+  if(activeScope==='commented'&&!state.order.length){
+   const empty=h('div',{class:'complete'});
+   empty.append(h('h2',{text:'📝 Тут будуть питання з вашими коментарями'}),h('p',{text:commentsReady?'Натисніть «📝 Додати коментар» біля будь-якого питання в будь-якому наборі — воно з’явиться тут, і ці питання можна буде переглядати й проходити окремо.':'Завантажую коментарі…'}));
+   if(commentsReady)empty.append(button('Перейти до порції 1','primary',()=>switchScope('batch1')));panel.append(empty);return;
   }
   const id=state.order[state.index];if(id===undefined){results(st);return}
  const q=Q[id],selected=state.answers[id],done=selected!==undefined;
@@ -667,7 +712,7 @@ function render(){
   const opt=h('button',{class:css,type:'button'});opt.disabled=done;
   opt.append(h('span',{class:'num',text:`${originalIndex+1}:`}),h('span',{class:'label',text:answer}));
   if(done&&originalIndex===q.correct)opt.append(h('span',{class:'endicon',text:'✓'}));else if(done&&originalIndex===selected)opt.append(h('span',{class:'endicon',text:'✕'}));
-  opt.addEventListener('click',()=>{if(state.answers[id]!==undefined)return;state.answers[id]=originalIndex;recordAttempt(id,originalIndex===q.correct);openOriginal=false;render()});choices.append(opt);
+  opt.addEventListener('click',()=>{if(state.answers[id]!==undefined)return;state.answers[id]=originalIndex;recordAttempt(id,originalIndex===q.correct);commentHidden.delete(id);openOriginal=false;render()});choices.append(opt);
  });layout.append(choices);body.append(layout);
  if(done){const good=selected===q.correct;const m=mistakeHistory[id];
    const feedback=good?(m&&!m.active&&m.streak===MASTERED_AT?'✓ Правильно! Три правильні поспіль — питання засвоєно й прибрано з типових помилок.':`✓ Правильно!${m?.active?' Прогрес засвоєння: '+m.streak+'/'+MASTERED_AT+'.':''}`):'✕ Неправильно. Правильну відповідь позначено зеленим. Питання у типових помилках, прогрес 0/3.';
@@ -694,7 +739,7 @@ function results(st){const end=h('div',{class:'complete'});end.append(h('h2',{te
 }
 async function reset(confirmIt=true){if(confirmIt&&!await askConfirm(`Прогрес набору «${SCOPE_NAMES[activeScope]}» буде втрачено. Інші набори залишаться без змін. Історія типових помилок і серія правильних відповідей збережуться.`,{title:'Почати заново?',ok:'Почати заново',danger:true}))return;
  state=newSession(activeScope);answerOrders=createAnswerOrders(answerOrders);openOriginal=false;render()}
-async function shuffleAll(){if(!SCOPE_IDS[activeScope].length){notice(activeScope==='mistakes'?'У списку типових помилок поки немає питань.':'Спочатку збережіть хоча б одне питання.');return}if(!await askConfirm(`Питання й відповіді набору «${SCOPE_NAMES[activeScope]}» буде перемішано, а прогрес цього набору — скинуто.`,{title:'Перемішати й почати заново?',ok:'Перемішати',danger:true}))return;
+async function shuffleAll(){if(!SCOPE_IDS[activeScope].length){notice({mistakes:'У списку типових помилок поки немає питань.',commented:'Спочатку додайте хоча б один коментар.'}[activeScope]||'Спочатку збережіть хоча б одне питання.');return}if(!await askConfirm(`Питання й відповіді набору «${SCOPE_NAMES[activeScope]}» буде перемішано, а прогрес цього набору — скинуто.`,{title:'Перемішати й почати заново?',ok:'Перемішати',danger:true}))return;
  const arr=[...SCOPE_IDS[activeScope]];for(let i=arr.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]]}
  state={order:arr,index:0,answers:{},seen:[],mode:'normal'};answerOrders=createAnswerOrders(answerOrders);openOriginal=false;render()}
 const ARCHIVE_ORDINALS=['перший','другий','третій','четвертий','п’ятий','шостий','сьомий','восьмий','дев’ятий','десятий'];

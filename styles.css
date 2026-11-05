@@ -158,3 +158,7 @@
 .confirm-actions .btn:focus-visible{outline:3px solid #70adeb;outline-offset:2px}
 .btn.danger{background:var(--red);color:#fff;border-color:var(--red)}.btn.danger:hover:not(:disabled){background:#9e2238}
 @media(max-width:600px){.confirm-actions .btn{flex:1}}
+
+/* Набір «З моїми коментарями» */
+.commented-card b{color:#245a8d}
+.comment-snippet{color:#245a8d;font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
