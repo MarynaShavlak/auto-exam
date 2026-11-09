@@ -17,12 +17,12 @@
 `{id, question, answers[], correct, diagram, original, notes[], batch, batchOrdinal}`
 - `correct` — індекс у `answers` (з 0). У UI показується оригінальний номер `index+1`, бо є варіанти типу «1 і 2».
 - `diagram` — `img/...` або `null` (тоді без картинки). `original` є завжди, показується після відповіді. `notes` — додаткові пояснення (є лише в кількох питаннях).
-- `id` — 1…230 з пропусками; на `id` прив'язані закладки й статистика користувачів, тому їх не перенумеровувати.
-- `batch` — `batch1`…`batch6`, `batchOrdinal` — номер у порції.
+- `id` — 1…277 з пропусками; на `id` прив'язані закладки й статистика користувачів, тому їх не перенумеровувати.
+- `batch` — `batch1`…`batch7`, `batchOrdinal` — номер у порції.
 
 ## Логіка (`app.js`)
 
-- Набори (scope): `batch1..6`, `all`, `saved`, `mistakes`, `commented` (питання з моїми коментарями, `reconcileCommentedSession`), `mix:batch1+batch3`. Списки в `SCOPE_IDS`, назви в `SCOPE_NAMES`; мікси створює `ensureMixedScope`.
+- Набори (scope): `batch1..7`, `all`, `saved`, `mistakes`, `commented` (питання з моїми коментарями, `reconcileCommentedSession`), `mix:batch1+batch3`. Списки в `SCOPE_IDS`, назви в `SCOPE_NAMES`; мікси створює `ensureMixedScope`.
 - Сесія набору: `{order, index, answers, seen, mode:'normal'|'review'}`; перевірка — `cleanSession`. Кожен набір має окремий прогрес у `root.sessions`. `seen` — id відкритих питань (позначає `markSeen()` у `render()`).
 - Пагінація (`renderPager`) — стрічка в один рядок (`layoutPagers` підганяє ширину під ціле число кнопок, ‹ › гортають по сторінці) з номерами 1…N поточного набору з класами `correct` / `wrong` / `skipped` (відкривали без відповіді) / `unseen` + `current`; є над питанням і на екрані результатів. Під нею — навігація (`.foot`: ← Попереднє / Пропустити / Наступне), теж над питанням, щоб кнопки не стрибали від висоти питання. Новий спосіб створити `state` — не забувати `seen:[]`.
 - `render()` щоразу перебудовує всю панель; DOM будується через `h(tag, props, children)` і `button(text, css, handler, disabled)`; повідомлення — `notice()`.
@@ -50,6 +50,7 @@ IndexedDB: база `pdr-quiz-comments-v1`, сховище `comments` (ключ 
 
 - Порції (`BATCHES`), картки порцій, лічильники в шапці й `<title>` будуються з `questions.js` (`renderBatchCards`). Нова порція = нове значення `batchN` у даних.
 - Нова порція зі скрінів (як `batch6`): `original` — увесь скрін у WebP, `diagram` — вирізана з нього ліва картинка (або `null`), правильна відповідь — зелена на скріні; перед додаванням звірити з наявними питаннями, дублікати не додавати.
+- Скріни з телефона (як `batch7`, сайт driver online): `original` — обрізка від картинки/питання до останньої відповіді без шапки й кнопок, `diagram` — картинка над питанням, скрін «Пояснення» до питання — у `notes`. Апостроф у текстах — `’`.
 - Нові питання в наявній порції дописуються в кінець сесій користувачів без скидання прогресу (`cleanSession`).
 - Після змін у даних: `node tools/check-data.js` (унікальні id, `correct` у межах, усі картинки існують і використовуються).
 - Числа відмінюються через `questionsCount(n)` / `batchesCount(n)` (`plural`).

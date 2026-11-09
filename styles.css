@@ -162,3 +162,6 @@
 /* Набір «З моїми коментарями» */
 .commented-card b{color:#245a8d}
 .comment-snippet{color:#245a8d;font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+/* Оригінали зі скрінів телефона вузькі й високі: не розтягувати ширше природного розміру і не вище екрана */
+.original-section img{width:auto;max-width:min(100%,1100px);max-height:80vh}
