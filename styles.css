@@ -159,6 +159,15 @@
 .btn.danger{background:var(--red);color:#fff;border-color:var(--red)}.btn.danger:hover:not(:disabled){background:#9e2238}
 @media(max-width:600px){.confirm-actions .btn{flex:1}}
 
+/* Синхронізація коментарів через GitHub Gist */
+.comments-bar small.sync-status{margin-top:2px}.comments-bar small.sync-status.error{color:var(--red)}.sync-status a{color:#1a65ad}
+.sync-dialog{width:min(520px,calc(100vw - 32px))}
+.sync-steps{margin:0 0 14px;padding-left:20px;color:#3b4f66;font-size:14px;line-height:1.5}.sync-steps li{margin:0 0 6px}.sync-steps a{color:#1a65ad}
+.sync-token{display:block;width:100%;font:inherit;padding:10px 12px;border:1px solid #c9d7e6;border-radius:10px;margin:0 0 12px}
+.sync-token:focus{outline:3px solid #70adeb;outline-offset:1px}
+.confirm-dialog p.sync-error{color:var(--red);font-size:14px;margin:-4px 0 12px}
+.confirm-dialog p.sync-note{color:var(--muted);font-size:12px;margin:0 0 16px}
+
 /* Набір «З моїми коментарями» */
 .commented-card b{color:#245a8d}
 .comment-snippet{color:#245a8d;font-size:12px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
