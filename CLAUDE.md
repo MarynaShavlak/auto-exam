@@ -17,12 +17,12 @@
 `{id, question, answers[], correct, diagram, original, notes[], batch, batchOrdinal}`
 - `correct` — індекс у `answers` (з 0). У UI показується оригінальний номер `index+1`, бо є варіанти типу «1 і 2».
 - `diagram` — `img/...` або `null` (тоді без картинки). `original` є завжди, показується після відповіді. `notes` — додаткові пояснення (є лише в кількох питаннях).
-- `id` — 1…277 з пропусками; на `id` прив'язані закладки й статистика користувачів, тому їх не перенумеровувати.
-- `batch` — `batch1`…`batch7`, `batchOrdinal` — номер у порції.
+- `id` — 1…306 з пропусками; на `id` прив'язані закладки й статистика користувачів, тому їх не перенумеровувати.
+- `batch` — `batch1`…`batch9`, `batchOrdinal` — номер у порції.
 
 ## Логіка (`app.js`)
 
-- Набори (scope): `batch1..7`, `all`, `saved`, `mistakes`, `commented` (питання з моїми коментарями, `reconcileCommentedSession`), `mix:batch1+batch3`. Списки в `SCOPE_IDS`, назви в `SCOPE_NAMES`; мікси створює `ensureMixedScope`.
+- Набори (scope): `batch1..9`, `all`, `saved`, `mistakes`, `commented` (питання з моїми коментарями, `reconcileCommentedSession`), `mix:batch1+batch3`. Списки в `SCOPE_IDS`, назви в `SCOPE_NAMES`; мікси створює `ensureMixedScope`.
 - Сесія набору: `{order, index, answers, seen, mode:'normal'|'review'}`; перевірка — `cleanSession`. Кожен набір має окремий прогрес у `root.sessions`. `seen` — id відкритих питань (позначає `markSeen()` у `render()`).
 - Пагінація (`renderPager`) — стрічка в один рядок (`layoutPagers` підганяє ширину під ціле число кнопок, ‹ › гортають по сторінці) з номерами 1…N поточного набору з класами `correct` / `wrong` / `skipped` (відкривали без відповіді) / `unseen` + `current`; є над питанням і на екрані результатів. Під нею — навігація (`.foot`: ← Попереднє / Пропустити / Наступне), теж над питанням, щоб кнопки не стрибали від висоти питання. Новий спосіб створити `state` — не забувати `seen:[]`.
 - `render()` щоразу перебудовує всю панель; DOM будується через `h(tag, props, children)` і `button(text, css, handler, disabled)`; повідомлення — `notice()`.
