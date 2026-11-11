@@ -18,13 +18,18 @@ const savedQuestions=new Set(savedIds);
 const MISTAKES_KEY='pdr-quiz-typical-mistakes-v1';
 const MASTERED_AT=3;
 const mistakeHistory=Object.create(null);
+// Запис історії: {wrongs, streak, active, lastWrong, updatedAt}; updatedAt — час останньої зміни (для синхронізації).
+function cleanMistake(entry){
+ if(!entry||typeof entry!=='object')return null;
+ const wrongs=Math.max(0,Math.floor(Number(entry.wrongs)||0));
+ const streak=Math.max(0,Math.min(MASTERED_AT,Math.floor(Number(entry.streak)||0)));
+ return wrongs>0?{wrongs,streak,active:!!entry.active&&streak<MASTERED_AT,lastWrong:Number(entry.lastWrong)||0,updatedAt:Number(entry.updatedAt)||0}:null;
+}
 try{
  const stored=JSON.parse(localStorage.getItem(MISTAKES_KEY)||'{}');
  if(stored && typeof stored==='object' && !Array.isArray(stored))for(const [rawId,entry] of Object.entries(stored)){
-  const id=Number(rawId);if(!Number.isInteger(id)||!Q[id]||!entry||typeof entry!=='object')continue;
-  const wrongs=Math.max(0,Math.floor(Number(entry.wrongs)||0));
-  const streak=Math.max(0,Math.min(MASTERED_AT,Math.floor(Number(entry.streak)||0)));
-  if(wrongs>0)mistakeHistory[id]={wrongs,streak,active:!!entry.active&&streak<MASTERED_AT,lastWrong:Number(entry.lastWrong)||0};
+  const id=Number(rawId),m=Number.isInteger(id)&&Q[id]&&cleanMistake(entry);
+  if(m)mistakeHistory[id]=m;
  }
 }catch(e){}
 function activeMistakeIds(){
@@ -56,7 +61,7 @@ function getMixedKey(selected){
  const list=BATCHES.filter(batch=>selected.includes(batch.key)).map(batch=>batch.key);
  return list.length>=2?MIX_PREFIX+list.join('+'):null;
 }
-function persistSaved(){SCOPE_IDS.saved=[...savedQuestions];try{localStorage.setItem(BOOKMARKS_KEY,JSON.stringify(SCOPE_IDS.saved))}catch(e){notice('Закладки не вдалося зберегти. Перевірте налаштування браузера.')}}
+function persistSaved(){SCOPE_IDS.saved=[...savedQuestions];try{localStorage.setItem(BOOKMARKS_KEY,JSON.stringify(SCOPE_IDS.saved))}catch(e){notice('Закладки не вдалося зберегти. Перевірте налаштування браузера.')}scheduleSync()}
 
 const STORAGE_KEY='pdr-quiz-batches-v1';
 const LAYOUT_KEY='pdr-quiz-batch-answer-layouts-v1';
@@ -122,6 +127,7 @@ function persistMistakes(){
  SCOPE_IDS.mistakes=activeMistakeIds();
  try{localStorage.setItem(MISTAKES_KEY,JSON.stringify(mistakeHistory))}
  catch(e){notice('Не вдалося зберегти статистику помилок. Перевірте налаштування браузера.')}
+ scheduleSync(15000);
 }
 // Підганяє сесію під новий список питань: прибирає зайві, дописує нові в кінець,
 // зберігає порядок, відповіді й поточне питання для тих, що залишились.
@@ -147,7 +153,7 @@ function recordAttempt(id,isCorrect){
   info.streak=Math.min(MASTERED_AT,info.streak+1);
   if(info.streak===MASTERED_AT)info.active=false;
  }else return;
- persistMistakes();
+ info.updatedAt=Date.now();persistMistakes();
  reconcileMistakeSession();
 }
 function openMistakeQuestion(id){
@@ -168,10 +174,7 @@ async function importMistakes(file){
   const valid=Object.entries(data.records).filter(([id,v])=>Q[Number(id)]&&v&&Number.isFinite(Number(v.wrongs))&&Number(v.wrongs)>0);
   if(!await askConfirm(`У файлі ${questionsCount(valid.length)} з історією помилок. Поточну статистику буде замінено даними з файлу.`,{title:'Імпортувати статистику?',ok:'Імпортувати',danger:true}))return;
   for(const id of Object.keys(mistakeHistory))delete mistakeHistory[id];
-  for(const [id,v] of valid){
-   const streak=Math.max(0,Math.min(MASTERED_AT,Math.floor(Number(v.streak)||0)));
-   mistakeHistory[id]={wrongs:Math.max(1,Math.floor(Number(v.wrongs))),streak,active:!!v.active&&streak<MASTERED_AT,lastWrong:Number(v.lastWrong)||0};
-  }
+  for(const [id,v] of valid){const m=cleanMistake(v);if(m)mistakeHistory[id]={...m,updatedAt:m.updatedAt||Date.now()}}
   persistMistakes();if(activeScope==='mistakes')state=newSession('mistakes');else reconcileMistakeSession();
   openOriginal=false;render();notice(`Історію відновлено. Активних типових помилок: ${SCOPE_IDS.mistakes.length}.`);
  }catch(e){notice('Не вдалося прочитати резервну копію типових помилок.');}
@@ -365,7 +368,7 @@ async function loadComments(){
    else if(Q[record.id])comments.set(record.id,commentEntry(record));
   }
  }catch(e){commentsDb=null;notice('Коментарі недоступні: браузер не дозволяє зберігати дані.')}
- commentsReady=true;reconcileCommentedSession();render();syncComments();
+ commentsReady=true;reconcileCommentedSession();render();syncNow();
 }
 // Набір «З моїми коментарями» — питання з коментарем у порядку порцій. Оновлюється після кожної зміни коментарів.
 function reconcileCommentedSession(){
@@ -466,7 +469,7 @@ async function saveComment(id){
  catch(e){notice('Не вдалося зберегти коментар. Можливо, у браузері закінчилося місце.');return}
  revokeUnused(comments.get(id)?.images||[],draft.images);
  if(empty)comments.delete(id);else comments.set(id,{html,images:draft.images,updatedAt});
- commentDrafts.delete(id);reconcileCommentedSession();render();notice(empty?'Порожній коментар видалено.':'Коментар збережено.');scheduleCommentsSync();
+ commentDrafts.delete(id);reconcileCommentedSession();render();notice(empty?'Порожній коментар видалено.':'Коментар збережено.');scheduleSync();
 }
 async function cancelComment(id){
  const draft=commentDrafts.get(id);
@@ -476,7 +479,7 @@ async function cancelComment(id){
 async function deleteComment(id){
  if(!await askConfirm('Ваш коментар до цього питання буде видалено разом із картинками. Відновити його можна лише з резервної копії.',{title:'Видалити коментар?',ok:'Видалити',danger:true}))return;
  try{await commentsTx('readwrite',store=>store.delete(id))}catch(e){notice('Не вдалося видалити коментар.');return}
- revokeUnused(comments.get(id)?.images||[],[]);comments.delete(id);reconcileCommentedSession();render();notice('Коментар видалено.');scheduleCommentsSync();
+ revokeUnused(comments.get(id)?.images||[],[]);comments.delete(id);reconcileCommentedSession();render();notice('Коментар видалено.');scheduleSync();
 }
 function blobToDataUrl(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.readAsDataURL(blob)})}
 const dataUrls=new WeakMap(); // Blob → dataURL: при кожній синхронізації картинки не кодуються заново
@@ -503,7 +506,7 @@ async function importComments(file){
   const replaced=valid.filter(([id])=>comments.has(Number(id))).length;
   if(!await askConfirm(`Питань із коментарями у файлі: ${valid.length}.${replaced?` Для ${replaced} з них ваші поточні коментарі буде замінено.`:''}`,{title:'Імпортувати коментарі?',ok:'Імпортувати',danger:replaced>0}))return;
   for(const [rawId,r] of valid)await storeCommentRecord(Number(rawId),r);
-  reconcileCommentedSession();render();notice(`Імпортовано коментарі: ${valid.length}.`);scheduleCommentsSync();
+  reconcileCommentedSession();render();notice(`Імпортовано коментарі: ${valid.length}.`);scheduleSync();
  }catch(e){notice('Не вдалося імпортувати коментарі. Перевірте JSON-файл.')}
 }
 
@@ -602,27 +605,35 @@ function renderCommentsBar(){
  const info=h('div'),actions=h('div',{class:'comments-bar-actions'});info.append(h('b',{text:`📝 Мої коментарі: ${comments.size}`}));
  if(sync.token){
   const status=h('small',{class:'sync-status'+(syncState==='error'?' error':'')});
-  status.append(syncState==='busy'?'☁️ Синхронізую з GitHub…':syncState==='error'?'⚠️ '+syncFail.text:`☁️ Синхронізовано з GitHub${sync.at?' '+syncTime(sync.at):''}. Коментарі однакові на всіх пристроях, де підключено той самий токен.`);
-  if(sync.gistId)status.append(' ',h('a',{href:'https://gist.github.com/'+sync.gistId,target:'_blank',rel:'noopener',text:'Відкрити gist'}));
+  status.append(syncState==='busy'?'☁️ Синхронізую з GitHub…':syncState==='error'?'⚠️ '+syncFail.text:`☁️ Синхронізовано з GitHub${sync.at?' '+syncTime(sync.at):''}. Коментарі, збережені питання й найчастіші помилки однакові на всіх пристроях, де підключено той самий токен.`);
+  if(sync.gistId)status.append(' ',h('a',{href:'https://gist.github.com/'+sync.gistId,target:'_blank',rel:'noopener',text:'Gist із коментарями'}));
   info.append(status);
-  actions.append(syncFail.status===401&&syncState==='error'?button('Ввести новий токен','soft',openSyncSetup):button('🔄 Синхронізувати','',()=>syncComments(),syncState==='busy'),button('Вимкнути синхронізацію','',disconnectSync));
+  actions.append(syncFail.status===401&&syncState==='error'?button('Ввести новий токен','soft',openSyncSetup):button('🔄 Синхронізувати','',()=>syncNow(),syncState==='busy'),button('Вимкнути синхронізацію','',disconnectSync));
  }else{
-  info.append(h('small',{text:'Коментарі й картинки зберігаються лише в цьому браузері. Увімкніть синхронізацію, щоб бачити їх на всіх своїх пристроях, або перенесіть файлом через експорт та імпорт.'}));
+  info.append(h('small',{text:'Коментарі, збережені питання й статистика помилок зберігаються лише в цьому браузері. Увімкніть синхронізацію, щоб бачити їх на всіх своїх пристроях, або перенесіть коментарі файлом через експорт та імпорт.'}));
   actions.append(button('☁️ Синхронізація між пристроями','soft',openSyncSetup));
  }
  actions.append(button('Експорт коментарів','',exportComments,!comments.size),...fileButton('Імпорт коментарів','application/json,.json','Імпортувати коментарі з JSON-файлу',files=>importComments(files[0])));
  bar.append(info,actions);
 }
 
-// ===== Синхронізація коментарів між пристроями через GitHub Gist =====
-// Сервера в сайту немає, тому коментарі лежать у секретному gist на GitHub користувача, а доступ дає його токен
-// (лише з дозволом gist). У gist — файл на кожне питання (q042.json у форматі запису експорту): збереження одного
-// коментаря перезаписує лише свій файл. Злиття трибічне: sync.base — updatedAt кожного коментаря на момент останньої
-// синхронізації, тож між пристроями переносяться й видалення. Змінили на обох пристроях — перемагає новіша версія,
-// а правка сильніша за видалення. Налаштування лежать в IndexedDB поруч із коментарями (запис id:'sync'): якщо
-// браузер стер коментарі, то стер і base, і пристрій не «видалить» їх з gist, а просто завантажить заново.
-const SYNC_RECORD='sync',GIST_API='https://api.github.com/gists',SYNC_MARK='pdr-comments-sync.json';
-const SYNC_TOKEN_URL='https://github.com/settings/tokens/new?scopes=gist&description='+encodeURIComponent('Тренажер ПДР — мої коментарі');
+// ===== Синхронізація між пристроями через GitHub Gist: коментарі, збережені питання, найчастіші помилки =====
+// Сервера в сайту немає, тому дані лежать у секретних gist на GitHub користувача, а доступ дає його токен
+// (лише з дозволом gist). Gist два: коментарі з картинками (великий, змінюється рідко) і «прогрес» — saved.json
+// та mistakes.json (маленький, змінюється після кожної помилки), щоб відповідь не тягнула завантаження картинок.
+// Прогрес проходження порцій не синхронізується — він у кожного пристрою свій.
+// Коментарі: файл на кожне питання (q042.json у форматі запису експорту) — збереження одного коментаря перезаписує
+// лише свій файл. Злиття трибічне: base — стан на момент останньої синхронізації, тож між пристроями переносяться
+// й видалення. Змінили на обох пристроях — перемагає новіша версія, а правка сильніша за видалення.
+// Base лежить поруч із даними, щоб зникати разом із ними: коментарів — в IndexedDB (запис id:'sync', там і токен),
+// закладок і помилок — у localStorage (PROGRESS_SYNC_KEY). Тоді стерті браузером дані не «видаляться» з gist,
+// а завантажаться заново.
+const SYNC_RECORD='sync',GIST_API='https://api.github.com/gists',PROGRESS_SYNC_KEY='pdr-quiz-progress-sync-v1';
+const SYNC_GISTS={
+ comments:{mark:'pdr-comments-sync.json',title:'мої коментарі',about:'Мої коментарі до питань тренажера ПДР: файл qNNN.json на кожне питання.'},
+ progress:{mark:'pdr-progress-sync.json',title:'збережені питання й найчастіші помилки',about:'Збережені питання (saved.json) і статистика найчастіших помилок (mistakes.json) тренажера ПДР.'}
+};
+const SYNC_TOKEN_URL='https://github.com/settings/tokens/new?scopes=gist&description='+encodeURIComponent('Тренажер ПДР — синхронізація');
 function emptySync(){return {token:'',gistId:'',version:'',base:{},at:0}} // version — версія gist після останньої синхронізації, at — її час
 let sync=emptySync(),syncState='',syncFail={},syncRun=null,syncAgain=false,syncTimer=null;
 function saveSync(s){return commentsTx('readwrite',store=>store.put({...s,id:SYNC_RECORD}))}
@@ -638,27 +649,31 @@ async function gistApi(s,path='',{method='GET',body}={}){
  if(!res.ok)throw syncError(res.status);
  return res.json();
 }
-// Gist із позначкою SYNC_MARK, створений раніше (зокрема на іншому пристрої), або новий секретний.
-async function findSyncGist(s){
+// Gist із позначкою (mark), створений раніше (зокрема на іншому пристрої), або новий секретний.
+// Якщо таких кілька (два пристрої створили одночасно), усі пристрої обирають найстаріший.
+async function findSyncGist(s,kind){
+ const {mark,title,about}=SYNC_GISTS[kind],found=[];
  for(let page=1;;page++){
-  const list=await gistApi(s,`?per_page=100&page=${page}`),found=list.find(g=>g.files?.[SYNC_MARK]);
-  if(found)return found.id;
+  const list=await gistApi(s,`?per_page=100&page=${page}`);found.push(...list.filter(g=>g.files?.[mark]));
   if(list.length<100)break;
  }
- const files={[SYNC_MARK]:{content:JSON.stringify({type:'pdr-comments-sync',version:1,about:'Мої коментарі до питань тренажера ПДР: файл qNNN.json на кожне питання.'},null,2)}};
- return (await gistApi(s,'',{method:'POST',body:{description:`Тренажер ПДР: мої коментарі (синхронізація між пристроями). Не видаляйте файл ${SYNC_MARK}.`,public:false,files}})).id;
+ if(found.length)return found.sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)))[0].id;
+ const files={[mark]:{content:JSON.stringify({type:mark.replace('.json',''),version:1,about},null,2)}};
+ return (await gistApi(s,'',{method:'POST',body:{description:`Тренажер ПДР: ${title} (синхронізація між пристроями). Не видаляйте файл ${mark}.`,public:false,files}})).id;
 }
+async function gistFileText(file){
+ if(!file.truncated)return file.content;
+ let res;try{res=await fetch(file.raw_url)}catch(e){throw syncError('offline')} // файли понад 1 МБ API обрізає — повний текст за raw_url
+ if(!res.ok)throw syncError(res.status);
+ return res.text();
+}
+function parseJson(text){try{return JSON.parse(text)}catch(e){return null}}
 async function readSyncGist(s){
  const gist=await gistApi(s,'/'+s.gistId),records=new Map();
  if(gist.truncated)throw syncError('files'); // GitHub віддає не більше 300 файлів
  for(const [name,file] of Object.entries(gist.files||{})){
   const id=Number(/^q(\d+)\.json$/.exec(name)?.[1]);if(!Q[id])continue;
-  let text=file.content;
-  if(file.truncated){ // файли понад 1 МБ API обрізає — повний текст за raw_url
-   let res;try{res=await fetch(file.raw_url)}catch(e){throw syncError('offline')}
-   if(!res.ok)throw syncError(res.status);text=await res.text();
-  }
-  let r=null;try{r=JSON.parse(text)}catch(e){}
+  const r=parseJson(await gistFileText(file));
   if(typeof r?.html!=='string'||!Array.isArray(r.images)||!Number.isFinite(r.updatedAt))throw syncError('format','Пошкоджений файл '+name);
   records.set(id,r);
  }
@@ -674,11 +689,11 @@ function chunkFiles(files,limit=2e6){
  if(Object.keys(chunk).length)chunks.push(chunk);
  return chunks;
 }
-async function syncOnce(s,retried=false){
- if(!s.gistId){s.gistId=await findSyncGist(s);s.version='';s.base={};await saveSync(s)}
+async function syncCommentsOnce(s,retried=false){
+ if(!s.gistId){s.gistId=await findSyncGist(s,'comments');s.version='';s.base={};await saveSync(s)}
  let latest;
  try{[latest]=await gistApi(s,`/${s.gistId}/commits?per_page=1`)}
- catch(e){if(e.status!==404||retried)throw e;s.gistId='';return syncOnce(s,true)} // gist видалили на GitHub — створимо новий
+ catch(e){if(e.status!==404||retried)throw e;s.gistId='';return syncCommentsOnce(s,true)} // gist видалили на GitHub — створимо новий
  // Знімок коментарів: те, що збережуть під час синхронізації, піде наступним проходом.
  const local=new Map(comments);let remote=null,version=s.version;
  if(latest?.version!==s.version){const read=await readSyncGist(s);remote=read.records;version=read.version||latest?.version||''}
@@ -711,13 +726,80 @@ async function syncOnce(s,retried=false){
   version=raced?'':expected;
   for(const [id,L] of pushed)if(L!==undefined)base[id]=L;
  }
- if(s!==sync)return; // синхронізацію вимкнули або змінили токен, поки чекали на GitHub
+ if(s!==sync)return 0; // синхронізацію вимкнули або змінили токен, поки чекали на GitHub
  Object.assign(s,{version,base,at:Date.now()});await saveSync(s);
- if(pulled){
-  reconcileCommentedSession();
-  if(document.activeElement?.isContentEditable)renderCommentsBar();else render(); // не перебудовуємо редактор, у якому друкують
-  notice(`☁️ Оновлено коментарі з інших пристроїв: ${pulled}.`);
+ return pulled;
+}
+
+// Закладки й помилки. Обидва — словники id → значення; base — їхні «відбитки» (fp) на момент останньої синхронізації.
+const savedFp=()=>'1',mistakeFp=m=>[m.wrongs,m.streak,m.active?1:0,m.lastWrong,m.updatedAt||0].join('/');
+const mistakeTime=m=>m.updatedAt||m.lastWrong||0;
+function fpMap(obj,fp){return Object.fromEntries(Object.entries(obj).map(([id,v])=>[id,fp(v)]))}
+function sameFp(a,b){const keys=Object.keys(a);return keys.length===Object.keys(b).length&&keys.every(k=>a[k]===b[k])}
+// Трибічне злиття: змінилося на одному боці — беремо цей бік; на обох — localNewer(L,R) вирішує, чи лишити локальне
+// (правка сильніша за видалення).
+function merge3(local,remote,base,fp,localNewer){
+ const out={};
+ for(const id of new Set([...Object.keys(local),...Object.keys(remote),...Object.keys(base)])){
+  if(!Q[id])continue;
+  const L=local[id],R=remote[id],l=L&&fp(L),r=R&&fp(R),b=base[id];
+  const v=l===r||r===b?L:l===b?R:!L?R:!R?L:localNewer(L,R)?L:R;
+  if(v)out[id]=v;
  }
+ return out;
+}
+function readProgressSync(){
+ const p=parseJson(localStorage.getItem(PROGRESS_SYNC_KEY));
+ return {gistId:'',version:'',saved:{},mistakes:{},...(p&&typeof p==='object'?p:{})};
+}
+function progressFromGist(texts){
+ const saved=texts.saved===null?{ids:[]}:parseJson(texts.saved),mistakes=texts.mistakes===null?{}:parseJson(texts.mistakes);
+ if(!Array.isArray(saved?.ids))throw syncError('format','Пошкоджений файл saved.json');
+ if(!mistakes||typeof mistakes!=='object'||Array.isArray(mistakes))throw syncError('format','Пошкоджений файл mistakes.json');
+ const order=saved.ids.filter(id=>Number.isInteger(id)&&Q[id]),m={};
+ for(const [id,v] of Object.entries(mistakes)){const entry=Q[id]&&cleanMistake(v);if(entry)m[id]=entry}
+ return {order,saved:Object.fromEntries(order.map(id=>[id,true])),mistakes:m};
+}
+// Повертає назви того, що оновилося з інших пристроїв (для повідомлення).
+async function syncProgressOnce(s,p=readProgressSync(),retried=false){
+ if(!p.gistId)p={gistId:await findSyncGist(s,'progress'),version:'',saved:{},mistakes:{}};
+ let latest;
+ try{[latest]=await gistApi(s,`/${p.gistId}/commits?per_page=1`)}
+ catch(e){if(e.status!==404||retried)throw e;return syncProgressOnce(s,{gistId:''},true)} // gist видалили — створимо новий
+ let remote=null,version=p.version;
+ if(latest?.version!==p.version){
+  const gist=await gistApi(s,'/'+p.gistId),file=name=>gist.files?.[name]?gistFileText(gist.files[name]):null;
+  remote=progressFromGist({saved:await file('saved.json'),mistakes:await file('mistakes.json')});
+  version=gist.history?.[0]?.version||latest?.version||'';
+ }
+ if(s!==sync)return [];
+ // Від знімка до запису — без await, щоб не загубити відповідь, дану під час синхронізації.
+ const localSaved=Object.fromEntries([...savedQuestions].map(id=>[id,true])),localMistakes={...mistakeHistory};
+ const savedOut=remote?merge3(localSaved,remote.saved,p.saved,savedFp,()=>true):localSaved;
+ const mistakesOut=remote?merge3(localMistakes,remote.mistakes,p.mistakes,mistakeFp,(L,R)=>mistakeTime(L)>=mistakeTime(R)):localMistakes;
+ const savedPrints=fpMap(savedOut,savedFp),mistakePrints=fpMap(mistakesOut,mistakeFp);
+ // Порядок закладок: як на цьому пристрої, нові з інших — у кінці.
+ const order=[...[...savedQuestions].filter(id=>savedOut[id]),...(remote?.order||[]).filter(id=>savedOut[id]&&!savedQuestions.has(id))];
+ const files={},changed=[];
+ if(!sameFp(savedPrints,remote?fpMap(remote.saved,savedFp):p.saved))files['saved.json']={content:JSON.stringify({ids:order})};
+ if(!sameFp(mistakePrints,remote?fpMap(remote.mistakes,mistakeFp):p.mistakes))files['mistakes.json']={content:JSON.stringify(mistakesOut)};
+ syncApplying=true; // власні записи в localStorage не мають запускати нову синхронізацію
+ try{
+  if(!sameFp(savedPrints,fpMap(localSaved,savedFp))){
+   savedQuestions.clear();for(const id of order)savedQuestions.add(id);
+   persistSaved();reconcileSavedSession();changed.push('збережені питання');
+  }
+  if(!sameFp(mistakePrints,fpMap(localMistakes,mistakeFp))){
+   for(const id of Object.keys(mistakeHistory))delete mistakeHistory[id];
+   Object.assign(mistakeHistory,mistakesOut);persistMistakes();reconcileMistakeSession();changed.push('найчастіші помилки');
+  }
+ }finally{syncApplying=false}
+ if(Object.keys(files).length){
+  const gist=await gistApi(s,'/'+p.gistId,{method:'PATCH',body:{files}}),[now,prev]=gist.history||[];
+  version=now&&prev?.version===version?now.version:''; // хтось записав між читанням і записом — наступного разу читаємо повністю
+ }
+ if(s===sync)try{localStorage.setItem(PROGRESS_SYNC_KEY,JSON.stringify({gistId:p.gistId,version,saved:savedPrints,mistakes:mistakePrints}))}catch(e){}
+ return changed;
 }
 function syncErrorText(e){
  if(e.status===401)return 'GitHub не приймає токен: можливо, його скопійовано не повністю, відкликано або закінчився термін дії.';
@@ -726,32 +808,48 @@ function syncErrorText(e){
  if(e.status==='offline')return 'Немає зв’язку з GitHub. Зміни збережено в цьому браузері — їх буде надіслано, коли з’явиться інтернет.';
  if(e.status==='files')return 'У gist понад 300 файлів — GitHub не віддає їх усі, тож синхронізація неможлива.';
  if(e.status==='format')return e.message+' у gist — синхронізацію зупинено, щоб нічого не втратити.';
- return `Не вдалося синхронізувати коментарі${typeof e.status==='number'?` (помилка GitHub ${e.status})`:''}.`;
+ return `Не вдалося синхронізувати${typeof e.status==='number'?` (помилка GitHub ${e.status})`:''}.`;
 }
 // Одночасно йде лише одна синхронізація; запит під час неї — ще один прохід після неї.
-function syncComments(){
+function syncNow(){
  if(!sync.token||!commentsReady||!commentsDb)return Promise.resolve(); // до завантаження коментарів локально «порожньо» — не синхронізуємо
  clearTimeout(syncTimer);syncTimer=null;
  if(syncRun){syncAgain=true;return syncRun}
  syncState='busy';renderCommentsBar();
  syncRun=(async()=>{
-  try{do{syncAgain=false;await syncOnce(sync)}while(syncAgain&&sync.token);syncState='ok';syncFail={}}
-  catch(e){syncState='error';syncFail={status:e.status,text:syncErrorText(e)};console.warn('Синхронізація коментарів:',e)}
+  try{
+   do{
+    syncAgain=false;const s=sync,changed=await syncProgressOnce(s),pulled=await syncCommentsOnce(s);
+    if(pulled)changed.unshift(`коментарі (${pulled})`);
+    if(changed.length&&s===sync){
+     reconcileCommentedSession();
+     if(document.activeElement?.isContentEditable)renderCommentsBar();else render(); // не перебудовуємо редактор, у якому друкують
+     notice(`☁️ Оновлено з інших пристроїв: ${changed.join(', ')}.`);
+    }
+   }while(syncAgain&&sync.token);
+   syncState='ok';syncFail={};
+  }
+  catch(e){syncState='error';syncFail={status:e.status,text:syncErrorText(e)};console.warn('Синхронізація:',e)}
   finally{syncRun=null;renderCommentsBar()}
  })();
  return syncRun;
 }
-function scheduleCommentsSync(){if(sync.token){clearTimeout(syncTimer);syncTimer=setTimeout(syncComments,1500)}}
+// Після зміни — синхронізація із затримкою; нова зміна відкладає її. Помилки — довша пауза (15 с), щоб під час
+// тренування не писати в gist після кожної відповіді (піти зі сторінки — надіслати одразу, див. visibilitychange).
+let syncApplying=false;
+function scheduleSync(ms=1500){if(sync.token&&!syncApplying){clearTimeout(syncTimer);syncTimer=setTimeout(syncNow,ms)}}
 // Токен перевіряємо одразу: знаходимо gist (зокрема створений на іншому пристрої) або створюємо новий.
 // Саме злиття йде вже у фоні — зі статусом у панелі коментарів.
 async function connectSync(token){
- const s={...emptySync(),token};s.gistId=await findSyncGist(s);
- await saveSync(s);sync=s;syncState='';syncFail={};syncComments();
+ const s={...emptySync(),token};s.gistId=await findSyncGist(s,'comments');
+ await saveSync(s);try{localStorage.removeItem(PROGRESS_SYNC_KEY)}catch(e){}
+ sync=s;syncState='';syncFail={};syncNow();
 }
 async function disconnectSync(){
- if(!await askConfirm('Коментарі залишаться і в цьому браузері, і в gist на GitHub, але цей пристрій перестане їх синхронізувати. Увімкнути знову можна тим самим токеном.',{title:'Вимкнути синхронізацію?',ok:'Вимкнути'}))return;
+ if(!await askConfirm('Коментарі, збережені питання й статистика помилок залишаться і в цьому браузері, і на GitHub, але цей пристрій перестане їх синхронізувати. Увімкнути знову можна тим самим токеном.',{title:'Вимкнути синхронізацію?',ok:'Вимкнути'}))return;
  clearTimeout(syncTimer);sync=emptySync();syncState='';syncFail={};
  try{await commentsTx('readwrite',store=>store.delete(SYNC_RECORD))}catch(e){}
+ try{localStorage.removeItem(PROGRESS_SYNC_KEY)}catch(e){}
  renderCommentsBar();notice('Синхронізацію вимкнено.');
 }
 function openSyncSetup(){
@@ -759,20 +857,20 @@ function openSyncSetup(){
  const first=h('li');first.append('Відкрийте ',h('a',{href:SYNC_TOKEN_URL,target:'_blank',rel:'noopener',text:'сторінку створення токена на GitHub'}),' (потрібен акаунт GitHub — той самий для всіх пристроїв).');
  const steps=h('ol',{class:'sync-steps'},[first,
   h('li',{text:'Позначка «gist» там уже стоїть — більше нічого не вмикайте. В Expiration оберіть термін дії (наприклад, No expiration) і натисніть Generate token унизу сторінки.'}),
-  h('li',{text:'Скопіюйте токен (починається з ghp_) і вставте нижче. На інших пристроях вставте той самий токен — коментарі підтягнуться самі.'})]);
+  h('li',{text:'Скопіюйте токен (починається з ghp_) і вставте нижче. На інших пристроях вставте той самий токен — усе підтягнеться само.'})]);
  const input=h('input',{type:'password',class:'sync-token',autocomplete:'off',spellcheck:'false',placeholder:'ghp_…','aria-label':'Токен GitHub'});
  const error=h('p',{class:'sync-error',role:'alert'});error.hidden=true;
  const ok=h('button',{type:'submit',class:'btn primary',text:'Підключити'}),cancel=button('Скасувати','',()=>dialog.close());
- form.append(h('h2',{id:'sync-title',text:'☁️ Синхронізація коментарів'}),
-  h('p',{text:'Коментарі й картинки зберігатимуться ще й у секретному gist на вашому GitHub і оновлюватимуться на всіх пристроях, де підключено той самий токен.'}),
-  steps,input,error,h('p',{class:'sync-note',text:'Токен зберігається лише в цьому браузері й дає доступ тільки до ваших gist. Секретний gist не видно в пошуку, але його може відкрити кожен, хто знає посилання.'}),
+ form.append(h('h2',{id:'sync-title',text:'☁️ Синхронізація між пристроями'}),
+  h('p',{text:'Коментарі з картинками, збережені питання й статистика найчастіших помилок зберігатимуться ще й у секретних gist на вашому GitHub і оновлюватимуться на всіх пристроях, де підключено той самий токен. Прогрес проходження порцій у кожного пристрою свій.'}),
+  steps,input,error,h('p',{class:'sync-note',text:'Токен зберігається лише в цьому браузері й дає доступ тільки до ваших gist. Секретні gist не видно в пошуку, але їх може відкрити кожен, хто знає посилання.'}),
   h('div',{class:'confirm-actions'},[cancel,ok]));
  const showError=text=>{error.textContent=text;error.hidden=false};
  form.addEventListener('submit',async e=>{
   e.preventDefault();const token=input.value.trim();
   if(!/^[\x21-\x7e]{20,}$/.test(token)){showError('Це не схоже на токен GitHub. Скопіюйте його повністю — він починається з ghp_ або github_pat_.');input.focus();return}
   ok.disabled=cancel.disabled=input.disabled=true;ok.textContent='Перевіряю токен…';error.hidden=true;
-  try{await connectSync(token);dialog.close();notice('Синхронізацію коментарів увімкнено.')}
+  try{await connectSync(token);dialog.close();notice('Синхронізацію увімкнено.')}
   catch(err){showError(syncErrorText(err))}
   finally{ok.disabled=cancel.disabled=input.disabled=false;ok.textContent='Підключити'}
  });
@@ -782,9 +880,9 @@ function openSyncSetup(){
 }
 // Коли повертаємося на вкладку — забираємо зміни з інших пристроїв; коли йдемо — одразу надсилаємо незбережене в gist.
 // Поки сторінка відкрита, перевіряємо gist раз на 2 хвилини (запит версії — легкий).
-document.addEventListener('visibilitychange',()=>{if(document.hidden){if(syncTimer)syncComments()}else if(Date.now()-sync.at>30000)syncComments()});
-window.addEventListener('online',()=>syncComments());
-setInterval(()=>{if(!document.hidden)syncComments()},120000);
+document.addEventListener('visibilitychange',()=>{if(document.hidden){if(syncTimer)syncNow()}else if(Date.now()-sync.at>30000)syncNow()});
+window.addEventListener('online',()=>syncNow());
+setInterval(()=>{if(!document.hidden)syncNow()},120000);
 
 function switchScope(scope){
  if(scope==='multi'){
