@@ -16,6 +16,14 @@ for (const q of questions) {
   else batches[q.batch] = (batches[q.batch] || 0) + 1;
   if (!Number.isInteger(q.batchOrdinal) || ordinals.has(q.batch + '#' + q.batchOrdinal)) fail(q, `batchOrdinal ${q.batchOrdinal} відсутній або повторюється в ${q.batch}`);
   ordinals.add(q.batch + '#' + q.batchOrdinal);
+  // also — інші порції, куди питання входить з тим самим id: [{batch, batchOrdinal}]
+  if (q.also !== undefined && !Array.isArray(q.also)) fail(q, 'also має бути масивом');
+  for (const p of Array.isArray(q.also) ? q.also : []) {
+    if (!/^batch\d+$/.test(p.batch) || p.batch === q.batch) { fail(q, `неправильна порція в also: "${p.batch}"`); continue; }
+    batches[p.batch] = (batches[p.batch] || 0) + 1;
+    if (!Number.isInteger(p.batchOrdinal) || ordinals.has(p.batch + '#' + p.batchOrdinal)) fail(q, `batchOrdinal ${p.batchOrdinal} відсутній або повторюється в ${p.batch} (also)`);
+    ordinals.add(p.batch + '#' + p.batchOrdinal);
+  }
   if (!q.original) fail(q, 'немає original');
   if (!Array.isArray(q.notes)) fail(q, 'notes має бути масивом');
   for (const src of [q.diagram, q.original, ...(q.notes || [])]) {

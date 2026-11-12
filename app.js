@@ -1,12 +1,20 @@
 // Порції визначаються з даних (batch1, batch2, …): нова порція в questions.js з’явиться автоматично.
 function batchNumber(key){return Number(key.replace('batch',''))}
-function questionLabel(q){return `Порція ${batchNumber(q.batch)} · №${q.batchOrdinal}`}
+// Власні назви порцій; без назви — «Порція N».
+const BATCH_TITLES={batch10:'Фінальні помилки'};
+function batchName(key){return BATCH_TITLES[key]||'Порція '+batchNumber(key)}
+// Питання може входити ще й в інші порції (also: [{batch, batchOrdinal}]) з тим самим id —
+// закладки, коментарі й статистика помилок у нього спільні.
+function batchPlaces(q){return [{batch:q.batch,batchOrdinal:q.batchOrdinal},...(q.also||[])]}
+// Підпис «Порція N · №M»; у порції, куди питання додане через also, — його номер у ній.
+function questionLabel(q,scope){const places=batchPlaces(q),p=places.find(p=>p.batch===scope)||places[0];return `${batchName(p.batch)} · №${p.batchOrdinal}`}
 // Українські форми числа: 1 питання, 3 порції, 5 питань.
 function plural(n,one,few,many){const d=n%10,dd=n%100;return `${n} ${d===1&&dd!==11?one:d>=2&&d<=4&&(dd<12||dd>14)?few:many}`}
 function questionsCount(n){return plural(n,'питання','питання','питань')}
 function batchesCount(n){return plural(n,'порція','порції','порцій')}
-const BATCHES=[...new Set(questions.map(q=>q.batch))].sort((a,b)=>batchNumber(a)-batchNumber(b))
- .map(key=>({key,name:'Порція '+batchNumber(key),ids:questions.filter(q=>q.batch===key).map(q=>q.id)}));
+const BATCHES=[...new Set(questions.flatMap(q=>batchPlaces(q).map(p=>p.batch)))].sort((a,b)=>batchNumber(a)-batchNumber(b))
+ .map(key=>({key,name:batchName(key),ids:questions.flatMap(q=>batchPlaces(q).filter(p=>p.batch===key).map(p=>[p.batchOrdinal,q.id]))
+  .sort((a,b)=>a[0]-b[0]).map(([,id])=>id)}));
 const Q=Object.fromEntries(questions.map(q=>[q.id,q]));
 const BOOKMARKS_KEY='pdr-quiz-saved-questions-v1';
 let savedIds=[];
@@ -53,7 +61,7 @@ function getValidMixedBatches(scope){
 function ensureMixedScope(scope){
  const selected=getValidMixedBatches(scope);
  if(!selected)return false;
- SCOPE_IDS[scope]=selected.flatMap(batch=>batch.ids);
+ SCOPE_IDS[scope]=[...new Set(selected.flatMap(batch=>batch.ids))];
  SCOPE_NAMES[scope]='Порції '+selected.map(batch=>batch.name.replace('Порція ','')).join(' + ');
  return true;
 }
@@ -266,7 +274,7 @@ function renderMixedPicker(){
  }
  section.append(options);
  const chosen=BATCHES.filter(batch=>mixedDraft.has(batch.key));
- const count=chosen.reduce((sum,batch)=>sum+batch.ids.length,0);
+ const count=new Set(chosen.flatMap(batch=>batch.ids)).size;
  section.append(h('p',{class:'mixed-summary',text:chosen.length>=2?`Обрано: ${batchesCount(chosen.length)} · ${questionsCount(count)}`:`Обрано: ${chosen.length} із ${BATCHES.length}. Потрібно щонайменше 2 порції.`}));
  const actions=h('div',{class:'mixed-actions'});
  const key=getMixedKey([...mixedDraft]);
@@ -921,7 +929,7 @@ function renderPager(){
   const answer=state.answers[id],isCurrent=id===current;
   const status=answer!==undefined?(answer===Q[id].correct?'correct':'wrong'):isCurrent?'unseen':seen.has(id)?'skipped':'unseen';
   if(!isCurrent||answer!==undefined)counts[status]++;
-  const label=`Питання ${i+1}: ${isCurrent&&answer===undefined?'поточне':PAGE_STATUS[status].toLowerCase()} · ${questionLabel(Q[id])}`;
+  const label=`Питання ${i+1}: ${isCurrent&&answer===undefined?'поточне':PAGE_STATUS[status].toLowerCase()} · ${questionLabel(Q[id],activeScope)}`;
   const item=h('button',{type:'button',class:`page-item ${status}${isCurrent?' current':''}`,title:label,'aria-label':label,text:String(i+1)});
   if(isCurrent)item.setAttribute('aria-current','step');
   item.addEventListener('click',()=>{state.index=i;openOriginal=false;render()});
@@ -988,7 +996,7 @@ function render(){
    text:savedQuestions.has(id)?'★ У збережених':'☆ Зберегти питання'});
  mark.addEventListener('click',()=>toggleSaved(id));headline.append(mark,commentButton(id));
   if(mistakeHistory[id]?.active){const m=mistakeHistory[id];headline.append(h('span',{class:'question-mastering',text:`⚠ У типових помилках · ${m.streak}/${MASTERED_AT}`}))}
- line.append(headline,h('small',{text:`${SCOPE_NAMES[activeScope]} · ${state.mode==='review'?'Повторення помилок · ':''}Порція ${batchNumber(q.batch)}, №${q.batchOrdinal}`}));top.append(line);
+ line.append(headline,h('small',{text:`${SCOPE_NAMES[activeScope]} · ${state.mode==='review'?'Повторення помилок · ':''}${questionLabel(q,activeScope)}`}));top.append(line);
  const pr=h('div',{class:'progress'});pr.append(h('div',{class:'fill',style:`width:${100*(state.index+1)/state.order.length}%`}));top.append(pr,...renderPager());panel.append(top);
  // Навігація над питанням: її положення не залежить від висоти питання.
  const footer=h('div',{class:'foot'});footer.append(button('← Попереднє','',()=>{openOriginal=false;state.index--;render()},state.index===0));
